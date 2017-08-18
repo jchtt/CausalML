@@ -286,8 +286,8 @@ module CausalMLTest
   function combined_oracle_screen()
     ps = [100]
     #= ps = [10] =#
-    #= ns = logspace(log10(50), 4, 10) =#
-    ns = 1000
+    ns = logspace(log10(50), 4, 10)
+    #= ns = 1000 =#
     #= ds = union(1:10, 12:2:20, 24:4:40) =#
     #= ds = 1:10 =#
     #= ds = [5,6] =#
@@ -295,8 +295,8 @@ module CausalMLTest
     trials = 1
     global combined_results = []
     #= lambdas = flipdim(logspace(-4, -1, 40), 1) =#
-    #= lambdas = flipdim(logspace(-4, -1, 50), 1) =#
-    lambdas = [1e-3]
+    lambdas = flipdim(logspace(-4, -1, 50), 1)
+    #= lambdas = [1e-3] =#
     #= lambdas = logspace(-4, -1, 3) =#
     #= lambdas = [1e-2] =#
 
@@ -316,7 +316,7 @@ module CausalMLTest
           errors_llc_trials = zeros(trials)
           lambdas_llc_trials = zeros(trials)
           ground_truth_norms = zeros(trials)
-          for trial in 1:trials
+          @time for trial in 1:trials
             println("Generating data")
             pop_data = PopulationData(p, d, matrix_std, experiment_type)
             emp_data = EmpiricalData(pop_data, n)
@@ -363,12 +363,13 @@ module CausalMLTest
                                        "lambdas_llc"=>lambdas_llc_trials,
                                        "gt"=>ground_truth_norms))
 
-          fname = "results4_norm_vard_" * suffix * ".jld"
-          #= jldopen(fname, "w") do file =#
-          open(fname, "w") do file
-            serialize(file, combined_results)
-            #= write(file, "combined_results", combined_results) =#
-          end
+          #= fname = "CausalML/results/results4_norm_vard_" * suffix * ".bin" =#
+          #= #1= jldopen(fname, "w") do file =1# =#
+          #= open(fname, "w") do file =#
+          #=   serialize(file, combined_results) =#
+          #=   #1= write(file, "combined_results", combined_results) =1# =#
+          #= end =#
+
           #= save(fname, "combined_results", combined_results) =#
         end
       end
@@ -423,7 +424,7 @@ module CausalMLTest
   #= llc_test() =#
   #= lh_oracle_test() =#
   #= combined_oracle_test() =#
-  @time combined_oracle_screen()
+  combined_oracle_screen()
   #= combined_llc_screen() =#
 	#= l2_constr_test() =#
 	#= l2_constr_test_sticky() =#
