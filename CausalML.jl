@@ -5,8 +5,8 @@ export gen_b, PopulationData, EmpiricalData, lh, l1_wrap, mat2vec, vec2mat, min_
 #using Plots
 using Lbfgsb
 using NLopt
-using FiniteDiff
-using ReverseDiff: GradientTape, GradientConfig, gradient, gradient!, compile
+#= using FiniteDiff =#
+#= using ReverseDiff: GradientTape, GradientConfig, gradient, gradient!, compile =#
 #using ForwardDiff
 using BenchmarkTools
 using StatsFuns
