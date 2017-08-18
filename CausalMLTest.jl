@@ -14,10 +14,11 @@ module CausalMLTest
 	using Calculus
   using Convex
   using SCS
+  using JLD
 
-	const experiment_type = "single"
-	const p = 10
-	const d = 2
+	const experiment_type = "binary"
+	const p = 100
+	const d = 10
 	matrix_std = 0.8
 	lambda = 1e-1
 	n = Int32(1e4)
@@ -118,71 +119,283 @@ module CausalMLTest
 
 	function l2_constr_test()
 		B0 = zeros(p, p)
+    lambda = 1e-3
 		lh_data = VanillaLHData(p, lambda, B0)
 		lh_data.x_base = mat2vec(pop_data.B, emp_data)
-		lh_data.upper_bound = 0.0001
+    lh_data.upper_bound = vecnorm(pop_data.B)^2
+    lh_data.B0 = B0
 		@time global B_lbfgsb = min_vanilla_lh(emp_data, lh_data, low_rank = true)
 		global s
 		global B_constr
-		@time (B_constr, s) = min_constraint_lh(emp_data, lh_data)
+		@time B_constr = min_constraint_lh(emp_data, lh_data)
 		println("LBFGSB, difference: ", vecnorm(B_lbfgsb - pop_data.B))
 		println("LBFGSB, constraint: ", vecnorm(B_constr - pop_data.B))
 		println("Difference: ", vecnorm(B_constr - B_lbfgsb))
-		println("Slack difference: ", s - vecnorm(B_constr-pop_data.B)^2)
-		println("Slack: ", s)
+		#= println("Slack difference: ", s - vecnorm(B_constr-pop_data.B)^2) =#
+		#= println("Slack: ", s) =#
+	end
+
+	function l2_constr_test_sticky()
+    @load "sticky_data3.jld"
+    lh_data.lambda = 1e4
+    lh_data.gamma = 1.5
+    #= lh_data.x_base = zeros(p*(p-1)) =#
+		#= B0 = zeros(p, p) =#
+    #= lambda = 1e-3 =#
+		#= lh_data = VanillaLHData(p, lambda, B0) =#
+		#= lh_data.x_base = mat2vec(pop_data.B, emp_data) =#
+    #= lh_data.upper_bound = vecnorm(pop_data.B)^2 =#
+    #= lh_data.B0 = B0 =#
+		@time global B_lbfgsb = min_vanilla_lh(emp_data, lh_data, low_rank = true)
+		global B_constr
+		@time B_constr = min_constraint_lh(emp_data, lh_data)
+		println("LBFGSB, difference: ", vecnorm(B_lbfgsb - pop_data.B))
+		println("LBFGSB, constraint: ", vecnorm(B_constr - pop_data.B))
+		println("Difference: ", vecnorm(B_constr - B_lbfgsb))
+		#= println("Slack difference: ", s - vecnorm(B_constr-pop_data.B)^2) =#
+		#= println("Slack: ", s) =#
 	end
 
 	function quic_test()
     data = QuadraticPenaltyData(p)
-    lambda = 1e-3
-    rho = 0.0
-		@time global theta1 = quic2(p, emp_data, emp_data.sigmas_emp[1], rho = rho, lambda = lambda, print_stats = false)
-		@time global theta2 = quic3(emp_data, data, emp_data.sigmas_emp[1], rho = rho, lambda = lambda, print_stats = false)
+    lambda = 1e0
+    rho = 1.0
+    global theta_prime = randn(p, p)
+    theta_prime = theta_prime' * theta_prime
+    data.lambda = lambda
+    data.print_stats = true
+		#= @time global theta1 = quic_old(p, emp_data, emp_data.sigmas_emp[1], rho = rho, lambda = lambda, print_stats = false) =#
+		#= @time global theta2 = quic(emp_data, data, emp_data.sigmas_emp[1], rho = rho, print_stats = true, theta_prime = theta_prime) =#
     Profile.clear()
-		@time global theta1 = quic2(p, emp_data, emp_data.sigmas_emp[1], rho = rho, lambda = lambda)
-		@time global theta2 = quic3(emp_data, data, emp_data.sigmas_emp[1], rho = rho, lambda = lambda)
-		println("Difference: ", vecnorm(theta1 - pop_data.thetas[1])^2)
-    println("Inverse emp cov difference: ", vecnorm(inv(emp_data.sigmas_emp[1]) - pop_data.thetas[1])^2)
-    println("Difference from each other: ", vecnorm(theta1 - theta2))
+		#= @time global theta1 = quic_old(p, emp_data, emp_data.sigmas_emp[1], rho = rho, lambda = lambda) =#
+		global theta2 = quic(emp_data, data, emp_data.sigmas_emp[1], rho = rho, theta_prime = theta_prime)
+		println("Difference: ", vecnorm(theta2 - pop_data.thetas[1])^2)
+    #= println("Inverse emp cov difference: ", vecnorm(inv(emp_data.sigmas_emp[1]) - pop_data.thetas[1])^2) =#
+    #= println("Difference from each other: ", vecnorm(theta1 - theta2)) =#
     
     xvar = Variable(p, p)
     sigma = emp_data.sigmas_emp[1]
     theta_prime = eye(p)
     problem = minimize(sum(sigma .* xvar) - logdet(xvar) + lambda * vecnorm(xvar, 1) + rho/2 * vecnorm(xvar - theta_prime)^2)
-    solve!(problem, SCSSolver())
+    #= solve!(problem, SCSSolver()) =#
+    #= x_convex = xvar.value =#
 
-    x_convex = xvar.value
     #= println(vecnorm(x_convex - x_quic)) =#
     #= println(vecnorm(thetas[1] - x_convex)) =#
     #= println(vecnorm(thetas[1] - x_quic)) =#
     #= println(vecnorm(x_quic2 - x_fb)) =#
-    println("Difference to convex program: ", vecnorm(theta2 - x_convex))
+    #= println("Difference to convex program: ", vecnorm(theta2 - x_convex)) =#
     #= println(vecnorm(x_convex - x_fb)) =#
 	end
 
 	function admm_test()
 		B0 = zeros(p, p)
-    #= constr_data = ConstraintData(p) =#
-    #= admm_data = ADMMData(emp_data, qu_data, constr_data) =#
+    #= constr_data = ConstraintData_old(p) =#
+    #= admm_data = ADMMData_old(emp_data, qu_data, constr_data) =#
     #= rho = 1.0 =#
     #= lambda = 1e-2 =#
-    #= @time global B_admm = min_admm(emp_data, admm_data, lambda, B0, rho) =#
+    #= @time global B_admm = min_admm_old(emp_data, admm_data, lambda, B0, rho) =#
     #= println("ADMM, difference: ", vecnorm(B_admm - pop_data.B)) =#
+    println(vecnorm(pop_data.B))
 
-    constr_data = ConstraintData2(p)
-    lambda = 1e-2
-    admm_data = ADMMData2(emp_data, constr_data, lambda)
+    constr_data = ConstraintData(p)
+    lambda = 5e-3
+    admm_data = ADMMData(emp_data, constr_data, lambda)
+    admm_data.quic_data.tol = 1e-4
     rho = 1.0
     admm_data.rho = rho
-    @time global B_admm2 = min_admm2(emp_data, admm_data, lambda, B0)
+    admm_data.quic_data.print_stats = false
+    admm_data.quic_data.inner_tol = 1e-8
+    admm_data.tol = 1e-1
+    admm_data.low_rank = experiment_type == "single"
+    @time global B_admm = min_admm(emp_data, admm_data, B0)
     println()
     #= println("Difference between ADMM results: ", vecnorm(B_admm - B_admm2)) =#
-    println("ADMM, difference: ", vecnorm(B_admm2- pop_data.B))
+    println("ADMM, difference: ", vecnorm(B_admm- pop_data.B))
 	end
+
+	function admm_oracle_test()
+		B0 = zeros(p, p)
+    constr_data = ConstraintData(p)
+    admm_data = ADMMData(emp_data, constr_data, 1.0)
+    admm_data.tol = 1e-2
+    admm_data.quic_data.print_stats = false
+    admm_data.quic_data.tol = 1e-2
+    admm_data.B0 = B0
+    lambdas = logspace(-4, 4, 20)
+    rho = 1.0
+    admm_data.rho = rho
+    admm_data.low_rank = experiment_type == "single"
+    global errors
+    (err, lambda, errors) = min_admm_oracle(pop_data, emp_data, admm_data, lambdas)
+    println()
+    #= println("Difference between ADMM results: ", vecnorm(B_admm - B_admm2)) =#
+    println("ADMM, difference: ", err)
+	end
+
+	function lh_oracle_test()
+		B0 = zeros(p, p)
+    lambda = 1e-2
+		lh_data = VanillaLHData(p, lambda, B0)
+		#= lh_data.x_base = mat2vec(pop_data.B, emp_data) =#
+    lh_data.x_base = mat2vec(zeros(p, p), emp_data)
+    lh_data.upper_bound = vecnorm(pop_data.B)^2 # upper bound is squared
+    lh_data.low_rank = experiment_type == "single"
+
+    lambdas = flipdim(logspace(-4, 1, 10), 1)
+    global errors
+    global B_lh
+    (B_lh, err, lambda, errors) = min_constr_lh_oracle(pop_data, emp_data, lh_data, lambdas)
+    println()
+    println("Constraint, difference: ", err)
+	end
+
+  function combined_oracle_test()
+		B0 = zeros(p, p)
+    constr_data = ConstraintData(p)
+    admm_data = ADMMData(emp_data, constr_data, 1.0)
+    admm_data.tol = 1e-2
+    admm_data.quic_data.print_stats = false
+    admm_data.quic_data.tol = 1e-6
+    admm_data.B0 = B0
+    rho = 1.0
+    admm_data.rho = rho
+    admm_data.low_rank = experiment_type == "single"
+		lh_data = VanillaLHData(p, lambda, B0)
+    lh_data.low_rank = experiment_type == "single"
+
+    lambdas = logspace(-1, 1, 5)
+
+    global errors1, errors2, B1, B2
+    (B1, B2, err1, err2, lambda1, lambda2, errors1, errors2) = combined_oracle(pop_data, emp_data, admm_data, lh_data, lambdas)
+
+    println()
+    #= println("Difference between ADMM results: ", vecnorm(B_admm - B_admm2)) =#
+    println("ADMM, difference: ", err1)
+    println("LH, difference: ", err2)
+  end
+
+  function combined_oracle_screen()
+    #= ps = [100] =#
+    ps = [100]
+    #= ds = union(1:10, 12:2:20, 24:4:40) =#
+    #= ds = 1:10 =#
+    #= ds = [5,6] =#
+    ds = 5
+    trials = 1
+    global combined_results = []
+    lambdas = flipdim(logspace(-4, -1, 40), 1)
+    #= lambdas = logspace(-4, -1, 3) =#
+    #= lambdas = [1e-2] =#
+    for p in ps
+      for d in ds
+        errors1_trials = zeros(trials)
+        lambdas1_trials = zeros(trials)
+        errors2_trials = zeros(trials)
+        lambdas2_trials = zeros(trials)
+        errors_llc_trials = zeros(trials)
+        lambdas_llc_trials = zeros(trials)
+        ground_truth_norms = zeros(trials)
+        for trial in 1:trials
+          println("Generating data")
+          pop_data = PopulationData(p, d, matrix_std, experiment_type)
+          emp_data = EmpiricalData(pop_data, n)
+          ground_truth_norms[trial] = vecnorm(pop_data.B)
+
+          B0 = zeros(p, p)
+          constr_data = ConstraintData(p)
+          admm_data = ADMMData(emp_data, constr_data, 1.0)
+          admm_data.tol = 5e-2
+          admm_data.quic_data.print_stats = false
+          admm_data.quic_data.tol = 1e-6
+          admm_data.B0 = B0
+          rho = 1.0
+          admm_data.rho = rho
+          admm_data.low_rank = experiment_type == "single"
+          lh_data = VanillaLHData(p, 1, B0)
+          lh_data.low_rank = experiment_type == "single"
+          lh_data.final_tol = 1e-3
+
+          global errors1, errors2, B1, B2
+          (B1, B2, err1, err2, lambda1, lambda2, errors1, errors2) = combined_oracle(pop_data, emp_data, admm_data, lh_data, lambdas)
+          (B, err, lambda, _) = llc(pop_data, emp_data, lambdas)
+          errors1_trials[trial] = err1
+          errors2_trials[trial] = err2
+          errors_llc_trials[trial] = err
+          lambdas1_trials[trial] = lambda1
+          lambdas2_trials[trial] = lambda2
+          lambdas_llc_trials[trial] = lambda
+
+          println()
+          #= println("Difference between ADMM results: ", vecnorm(B_admm - B_admm2)) =#
+          println("ADMM, difference: ", err1)
+          println("LH, difference: ", err2)
+        end
+
+        push!(combined_results, Dict("p"=>p, "d"=>d,
+                                     "errs1"=> errors1_trials,
+                                     "errs2"=>errors2_trials,
+                                     "errs_llc"=>errors_llc_trials,
+                                     "lambdas1"=>lambdas1_trials,
+                                     "lambdas2"=>lambdas2_trials,
+                                     "lambdas_llc"=>lambdas_llc_trials,
+                                     "gt"=>ground_truth_norms))
+
+        @save "results3_norm_vard.jld" combined_results
+      end
+    end
+  end
+
+  function combined_llc_screen()
+    ps = [100]
+    #= ds = union(1:10, 12:2:20, 24:4:40) =#
+    #= ds = 1:10 =#
+    ds = 5
+    trials = 3
+    global combined_results_llc = []
+    lambdas = logspace(-4, -1, 30)
+    for p in ps
+      for d in ds
+        errors_trials = zeros(trials)
+        lambdas_trials = zeros(trials)
+        for trial in 1:trials
+          println("Generating data")
+          pop_data = PopulationData(p, d, matrix_std, experiment_type)
+          emp_data = EmpiricalData(pop_data, n)
+
+          (B, err, lambda, _) = llc(pop_data, emp_data, lambdas)
+          errors_trials[trial] = err
+          lambdas_trials[trial] = lambda
+
+          println()
+        end
+
+        push!(combined_results_llc, Dict("p"=>p, "d"=>d, "errs"=> errors_trials,
+                                    "lambdas"=>lambdas_trials,
+                                   ))
+
+        @save "results2.jld" combined_results_llc
+      end
+    end
+  end
+
+  function llc_test()
+    lambdas = logspace(-4, 0, 15)
+    global B_llc, errors
+    (B_llc, err, lambda, errors) = llc(pop_data, emp_data, lambdas)
+    println("LLC, difference: ", vecnorm(B_llc - pop_data.B))
+  end
 
 	#= fast_lh_test() =#
 	#= lbfgsb_test_2() =#
-	#= l2_constr_test() =#
 	#= quic_test() =#
-  admm_test()
+  #= admm_oracle_test() =#
+  #= admm_test() =#
+  #= llc_test() =#
+  #= lh_oracle_test() =#
+  #= combined_oracle_test() =#
+  @time combined_oracle_screen()
+  #= combined_llc_screen() =#
+	#= l2_constr_test() =#
+	#= l2_constr_test_sticky() =#
 end

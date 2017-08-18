@@ -1,6 +1,6 @@
 # vim: ts=2 sw=2 et
 module CausalML
-export gen_b, PopulationData, EmpiricalData, lh, l1_wrap, mat2vec, vec2mat, min_vanilla_lh, VanillaLHData, min_constraint_lh, quic2, quic3, QuadraticPenaltyData, min_admm, ConstraintData, ADMMData, QuadraticPenaltyData2, min_admm2, ConstraintData2, ADMMData2
+export gen_b, PopulationData, EmpiricalData, lh, l1_wrap, mat2vec, vec2mat, min_vanilla_lh, VanillaLHData, min_constraint_lh, quic_old, quic, QuadraticPenaltyData, min_admm, ConstraintData, ADMMData, QuadraticPenaltyData_old, min_admm_old, ConstraintData_old, ADMMData_old, min_admm_oracle, llc, symmetrize!, min_constr_lh_oracle, combined_oracle
 
 #using Plots
 using Lbfgsb
@@ -13,6 +13,10 @@ using StatsFuns
 using Base.LinAlg.LAPACK
 using Calculus
 #= using RGlasso =#
+using JLD
+using Lasso
+
+first_pass = true
 
 include("Tools.jl")
 using .Tools
@@ -26,15 +30,28 @@ if ~("./Liblbfgs.jl" in LOAD_PATH)
 end
 using Liblbfgs
 
+function symmetrize!(A)
+  n = LinAlg.checksquare(A)
+  @inbounds for i = 1:n, j = i:n
+    A[i,j] = (B[i,j] + B[j,i]) / 2
+  end
+  LinAlg.copytri!(A, 'U')
+end
+
 # Generate a random matrix B
 function gen_b(p, d, std)
  B = zeros(p, p)
  for i = 1:p
   perm = randperm(p - 1)
   perm[perm .>= i] += 1
-  B[i, perm[1:d]] = std*randn(d)
+  #= B[i, perm[1:d]] = std*randn(d) =#
+  B[i, perm[1:d]] = std*(2*rand(d)-1)
  end
  return B
+end
+
+function hard_thresh(x, t)
+  return abs(x) >= t ? x : 0.0
 end
 
 type PopulationData
@@ -56,7 +73,9 @@ type PopulationData
     ret.p = p
     ret.d = d
     ret.std = std
+    #= ret.B = gen_b(p, d, std/sqrt(d*p)) =#
     ret.B = gen_b(p, d, std/d)
+    #= ret.B = hard_thresh.(ret.B, std/d) =#
 
     # Generate experiment data
     ret.Us = []
@@ -335,6 +354,9 @@ type VanillaLHData
   aug_diff::Array{Float64,1} # Storage for difference vector
   x_base::Array{Float64,1} # Base vector for l2 constraint
   upper_bound::Float64 # Radius for l2 constraint
+  low_rank::Bool # Use low rank decomposition
+  s::Float64 # Starting value for constraint slack parameter
+  dual::Float64 # Dual variable
 end
 
 function VanillaLHData(p, lambda, B0)
@@ -365,11 +387,14 @@ function VanillaLHData(p, lambda, B0)
                        zeros(2*p*(p-1)+1),
                        zeros(2*p*(p-1)+1),
                        1e-6, # final_tol
-                       0.5,
-                       10.0,
+                       0.5, # gamma
+                       1.5, # tau
                        zeros(p*(p-1)), # aug_diff
                        zeros(p*(p-1)),
-                       Inf
+                       Inf,
+                       false, # low_rank
+                       0.0, # s0
+                       0.0, # dual
                       )
 end
 
@@ -410,6 +435,7 @@ function lh(emp_data, data, b, g::Vector; reduced = true, low_rank = false)
     #= data.Ainv[:] .-= B[:] =#
     BLAS.axpy!(-1.0, data.B, data.Ainv)
     BLAS.gemm!('T', 'N', 1.0, data.Ainv, data.Ainv, 0.0, data.Ainv2)
+    symmetrize!(data.Ainv2)
 
     copy!(data.CholfactFactor, data.Ainv2)
     # Use Symmetric() to handle round-off errors above
@@ -432,6 +458,7 @@ function lh(emp_data, data, b, g::Vector; reduced = true, low_rank = false)
       BLAS.axpy!(1.0, data.Breds[e], view(data.Ainv2e, J_ind, :))
       BLAS.axpy!(1.0, data.Bredst[e], view(data.Ainv2e, :, J_ind))
       BLAS.gemm!('N', 'N', -1.0, data.Bredst[e], data.Breds[e], 1.0, data.Ainv2e)
+      symmetrize!(data.Ainv2e)
 
       val += BLAS.dot(p^2, data.Ainv2e, 1, emp_data.sigmas_emp[e], 1)
 
@@ -462,15 +489,30 @@ function lh(emp_data, data, b, g::Vector; reduced = true, low_rank = false)
       end
       BLAS.axpy!(-1.0, view(data.B, emp_data.Us_ind[e], :), view(data.Ainv, emp_data.Us_ind[e], :))
       BLAS.gemm!('T', 'N', 1.0, data.Ainv, data.Ainv, 0.0, data.Ainv2)
+      symmetrize!(data.Ainv2)
       val += BLAS.dot(p^2, emp_data.sigmas_emp[e], 1, data.Ainv2, 1)
       copy!(data.CholfactFactor, data.Ainv2)
       # Use Symmetric() to handle round-off errors above
-      cholfact!(Symmetric(data.CholfactFactor))
+      try
+        cholfact!(Symmetric(data.CholfactFactor))
+      catch y
+        #= println("Cholesky exception!") =#
+        #= println("lambda = ", data.lambda) =#
+        #= println("x_base = ", data.x_base) =#
+        #= println("B = ", data.B) =#
+        #= println("Ainv = ", data.Ainv) =#
+        #= println("Ainv2 = ", data.Ainv2) =#
+        #= save("sticky_data3.jld", "emp_data", emp_data, "lh_data", data) =#
+        #= throw(y) =#
+        val = Inf
+        return val
+      end
       try
         val -= sum(2*log(diag(data.CholfactFactor)))
       catch
         println("Warning: (I-U*B)'*(I-U*B) not positive definite.")
         val = Inf
+        return val
       end
 
       #= Ainv .= I - U*B =#
@@ -581,12 +623,12 @@ function min_vanilla_lh(emp_data, lh_data; low_rank = false)
 end
 
 function min_constraint_lh(emp_data,
-                           data,
-                           low_rank = false
+                           data
                           )
   
   p = emp_data.p
   x_base = data.x_base
+  low_rank = data.low_rank
 
   inner_fun(x, g) = lh(emp_data, data, x, g, low_rank = low_rank)
   outer_fun(x, g) = l1_wrap(x, g, data.lambda, inner_fun, data)
@@ -637,28 +679,38 @@ function min_constraint_lh(emp_data,
     data.lb_aug[2*dim+1] = -Inf
     #= ub[1:dim] = ub_x =#
     data.ub_aug[2*dim+1] = data.upper_bound
+    println("Upper bound: ", data.upper_bound)
+    println("dual = ", dual)
+    println("rho = ", rho)
 
     f_auglag(x, grad) = augmented_lagrangian(x, grad, rho, dual, data)
-    @time (minf, minx, iters) = lbfgsb(f_auglag, x0, lb = data.lb_aug, ub = data.ub_aug, pgtol = data.final_tol)
+    (minf, minx, iters, _, status) = lbfgsb(f_auglag, x0, lb = data.lb_aug, ub = data.ub_aug, pgtol = data.final_tol, iprint=-1, factr = 1e6)
+    if status == "abnormal"
+      error("Lbfgsb could not terminate!")
+    end
     copy!(x_new, minx)
   end
 
   #= x_old = zeros(dim+1) =#
   #= fill!(data.x_old, 0.0) =#
   copy!(view(data.x_old, 1:2*dim), start)
-  data.x_old[2*dim+1] = 0.0
+  data.x_old[2*dim+1] = data.s
   copy!(data.aug_diff, view(data.x_old, 1:dim))
   BLAS.axpy!(-1.0, view(data.x_old, dim+1:2*dim), data.aug_diff)
   BLAS.axpy!(-1.0, x_base, data.aug_diff)
   norm_old = vecnorm(data.aug_diff)^2
   constr_old = data.x_old[2*dim+1] - norm_old
-  dual = 0.0
+  dual = data.dual
   rho = 1.0
   #= x_new = similar(x_old) =#
+  println("s = ", data.x_old[2*dim+1], ", dual = ", dual)
 
+  println()
+  println("Starting augmented Lagrangian optimization")
   while ~converged
     println("Solving subproblem")
-    solve_auglag(data.x_new, data.x_old, rho, dual, data)
+    copy!(data.x_new, data.x_old)
+    solve_auglag(data.x_new, data.x_new, rho, dual, data)
     println("Subproblem solved")
     copy!(data.aug_diff, view(data.x_new, 1:dim))
     BLAS.axpy!(-1.0, view(data.x_new, dim+1:2*dim), data.aug_diff)
@@ -666,12 +718,13 @@ function min_constraint_lh(emp_data,
     norm_new = vecnorm(data.aug_diff)^2
     constr_new = data.x_new[2*dim+1] - norm_new
     dual += rho * constr_new
+    println("Dual: ", dual)
     println("Constraint: ", constr_new)
 
     if abs(constr_new) < data.final_tol
       converged = true
       break
-    elseif abs(constr_new) > data.tau * abs(constr_old)
+    elseif abs(constr_new) > data.tau * abs(constr_old)# && rho < 10
       # Tighten penalty
       rho = data.gamma * rho 
     end
@@ -681,14 +734,17 @@ function min_constraint_lh(emp_data,
   end
 
   B_min = vec2mat(data.x_new[1:dim]-data.x_new[dim+1:2*dim], emp_data)
-  return (B_min, data.x_new[2*dim+1])
+  #= return (B_min, data.x_new[2*di+1]) =#
+  data.s = copy(data.x_new[2*dim+1])
+  data.dual = dual
+  return B_min
 end
 
 function soft_thresh(x, r)
   return sign(x) .* max(abs(x) - r, 0)
 end
 
-function quic2(p::Int64,
+function quic_old(p::Int64,
                emp_data,
                sigma::Array{Float64, 2};
                theta_prime::Array{Float64, 2} = eye(p),
@@ -933,6 +989,8 @@ type QuadraticPenaltyData
   inner_tol::Float64 # Inner iteration tolerance
   relaxation::Float64 # Multiplier in Armijo condition
   beta::Float64 # Multiply with this for Armijo
+  eps::Float64 # relax free variable selection by eps
+  print_stats::Bool # print additional information
   W::Array{Float64,2}
   Wu::Array{Float64,2}
   Wt::Array{Float64,2}
@@ -948,10 +1006,13 @@ type QuadraticPenaltyData
   theta_new::Array{Float64,2}
   diff::Array{Float64,2}
   uvec::Array{Float64,1}
+  hard_thresh::Float64 # Cut-off for each major iteration
 end
 
 function QuadraticPenaltyData(p, lambda, inner_mult, theta0,
-                             tol, inner_tol, relaxation, beta)
+                             tol, inner_tol, relaxation, beta, eps,
+                             print_stats, hard_thresh,
+                            )
   return QuadraticPenaltyData(
                               # For quic
                               lambda,
@@ -961,6 +1022,8 @@ function QuadraticPenaltyData(p, lambda, inner_mult, theta0,
                               inner_tol,
                               relaxation,
                               beta,
+                              eps,
+                              print_stats,
                               zeros(p, p), # W
                               zeros(p, p), # Wu
                               zeros(p, p), # Wt
@@ -976,6 +1039,7 @@ function QuadraticPenaltyData(p, lambda, inner_mult, theta0,
                               zeros(p, p), # theta_new
                               zeros(p, p), # diff
                               zeros(p), # uvec
+                              hard_thresh,
                              )
 end
 
@@ -988,10 +1052,13 @@ function QuadraticPenaltyData(p)
                               1e-8, # inner_tol
                               0.2, # relaxation
                               0.9, # beta
+                              0.01, # eps
+                              false, # print_stats
+                              1e-12, # hard_thresh
                              )
 end
 
-function quic3(emp_data,
+function quic(emp_data,
                quic_data,
                sigma::Array{Float64, 2};
                theta_prime::Array{Float64, 2} = eye(emp_data.p),
@@ -1004,7 +1071,7 @@ function quic3(emp_data,
                #= relaxation::Float64 = 0.2, =#
                #= beta::Float64 = 0.9, =#
                g::Array{Float64, 2} = Array{Float64,2}(0,0),
-               print_stats = false
+               #= print_stats = false =#
              )
 
   # Shortcuts
@@ -1016,7 +1083,8 @@ function quic3(emp_data,
   inner_tol = data.inner_tol
   relaxation = data.relaxation
   beta = data.beta
-
+  eps = data.eps
+  print_stats = data.print_stats
 
   (p1, p2) = size(sigma)
   if p1 != p2
@@ -1025,20 +1093,23 @@ function quic3(emp_data,
   p = p1
   converged_outer = false
   counter = 1
+  alpha = 1.0
   copy!(data.W, theta0)
   LAPACK.potrf!('U', data.W)
 
   #= theta = copy(theta0) =#
   copy!(data.theta, theta0)
-  transpose!(data.thetaT, data.theta)
-  BLAS.axpy!(1.0, data.thetaT, data.theta)
-  scale!(0.5, data.theta)
+  symmetrize!(data.theta)
+  #= transpose!(data.thetaT, data.theta) =#
+  #= BLAS.axpy!(1.0, data.thetaT, data.theta) =#
+  #= scale!(0.5, data.theta) =#
   #= theta = (theta0 + theta0')/2 =#
-  transpose!(data.theta_primeT, theta_prime)
+  #= transpose!(data.theta_primeT, theta_prime) =#
   copy!(data.theta_prime, theta_prime)
-  BLAS.axpy!(1.0, data.theta_primeT, data.theta_prime)
-  scale!(0.5, data.theta_prime)
+  #= BLAS.axpy!(1.0, data.theta_primeT, data.theta_prime) =#
+  #= scale!(0.5, data.theta_prime) =#
   #= theta_prime = (theta_prime + theta_prime')/2 =#
+  symmetrize!(data.theta_prime)
 
   #= D = similar(sigma) =#
   #= D_old = similar(sigma) =#
@@ -1089,7 +1160,7 @@ function quic3(emp_data,
     BLAS.axpy!(-1.0, data.W, data.G)
     BLAS.axpy!(rho, data.diff, data.G)
 
-    S = findn(triu((abs(data.G) .>= lambda) | (data.theta .!= 0)))
+    S = findn(triu((abs(data.G) .>= lambda - eps) | (data.theta .!= 0)))
 
     # Minimum norm subgradient
     @simd for I in eachindex(data.Gmin)
@@ -1105,7 +1176,7 @@ function quic3(emp_data,
     if print_stats
       println("Gradient norm: ", vecnorm(data.Gmin))
     end
-    if vecnorm(data.Gmin) < tol
+    if vecnorm(data.Gmin, 1)*alpha < tol*vecnorm(data.theta, 1)
       converged_outer = true
       break
     end
@@ -1116,6 +1187,7 @@ function quic3(emp_data,
     inner_iterations = floor(Int64, 1 + counter * inner_mult)
     inner_converged = false
     while r <= inner_iterations && ~inner_converged #|| ~descent_step
+    #= while r <= 100 =#
       #= if mod(r, 1) == 0 =#
         if print_stats
           println("Inner iteration ", r)
@@ -1135,7 +1207,7 @@ function quic3(emp_data,
 
       for (i, j) in zip(S...)
         a = data.W[i,j]^2
-        a += rho/2
+        a += rho
         if i != j
           a += data.W[i,i]*data.W[j,j]
         end
@@ -1150,6 +1222,40 @@ function quic3(emp_data,
         b -= data.W[i,j]
         b += rho * (data.theta[i,j] + data.D[i,j] - data.theta_prime[i,j])
         c = data.theta[i,j] + data.D[i,j]
+
+        #= # DEBUG start =#
+        #= mu = 1 =#
+        #= f0 = sum((sigma - data.W).*data.D) + 0.5*trace(data.W*data.D*data.W*data.D) + rho/2*vecnorm(data.theta + data.D - data.theta_prime)^2 =#
+        #= data.D[i,j] += mu =#
+        #= if i != j =#
+        #=   data.D[j,i] += mu =#
+        #= end =#
+        #= f_plus = sum((sigma - data.W).*data.D) + 0.5*trace(data.W*data.D*data.W*data.D) + rho/2*vecnorm(data.theta + data.D - data.theta_prime)^2 =#
+        #= data.D[i,j] -= 2*mu =#
+        #= if i != j =#
+        #=   data.D[j,i] -= 2*mu =#
+        #= end =#
+        #= f_min = sum((sigma - data.W).*data.D) + 0.5*trace(data.W*data.D*data.W*data.D) + rho/2*vecnorm(data.theta + data.D - data.theta_prime)^2 =#
+        #= #1= c_ideal = f0 =1# =#
+        #= b_ideal = (f_plus - f_min)/(2*mu) =#
+        #= a_ideal = 2*(f_plus - mu*b_ideal - f0)/(mu^2) =#
+        #= if i != j =#
+        #=   b_ideal /= 2 =#
+        #=   a_ideal /= 2 =#
+        #= end =#
+        #= #1= if i == j =1# =#
+        #= if counter == 1 =#
+        #=   println("-------------------------------------------") =#
+        #=   println("Theory: a = ", a_ideal, ", b = ", b_ideal) =#
+        #=   println("Practice: a = ", a, ", b = ", b) =#
+        #= end =#
+        #= #1= end =1# =#
+        #= data.D[i,j] += mu =#
+        #= if i != j =#
+        #=   data.D[j,i] += mu =#
+        #= end =#
+        #= # DEBUG end =#
+
         mu = -c + soft_thresh(c - b/a, lambda/a)
         if mu != 0.0
           data.D[i,j] += mu
@@ -1192,10 +1298,20 @@ function quic3(emp_data,
       #= println("Inner difference: ", diff) =#
       if diff < inner_tol
         inner_converged = true
-        println("Inner converged, |D| = ", vecnorm(data.D), ", comparison = ", comparison)
+        #= println("Inner converged, |D| = ", vecnorm(data.D), ", comparison = ", comparison) =#
       end
       r += 1
     end
+
+    global first_pass
+    if first_pass && counter >= 2000
+      println("Sticky!")
+      println("theta_prime = ", theta_prime)
+      save("sticky_data2.jld", "D", data.D, "theta", data.theta, "sigma", sigma, "rho", rho, "lambda", lambda, "theta_prime", data.theta_prime, "Gmin", data.Gmin)
+      println(S)
+      first_pass = false
+    end
+
 
     # Sufficient decrease condition 
     #= if comparison > -search_relaxation * vecnorm(D)^exponent =#
@@ -1240,6 +1356,18 @@ function quic3(emp_data,
       else
         alpha *= beta
         if print_stats
+          #= print("theta = ") =#
+          #= println(data.theta) =#
+          #= print("D = ") =#
+          #= println(data.D) =#
+          #= print("sigma = ") =#
+          #= println(sigma) =#
+          #= print("theta_prime = ") =#
+          #= println(theta_prime) =#
+          #= print("rho = ") =#
+          #= println(rho) =#
+          #= print("lambda = ") =#
+          #= println(lambda) =#
           println("decrease alpha = ", alpha, ", f_new = ", f_new, ", f_old = ", f_old)
         end
         #= println("theta_new = ", theta_new) =#
@@ -1259,6 +1387,11 @@ function quic3(emp_data,
     f_old = copy(f_new)
     #= theta[:] = copy(theta_new) =#
     copy!(data.theta, data.theta_new)
+    for i = 1:p
+      for j = setdiff(1:p, i)
+        data.theta[i,j] = hard_thresh(data.theta[i,j], data.hard_thresh)
+      end
+    end
     l1_old = copy(l1_new)
     LAPACK.potri!('U', data.W)
     data.W[emp_data.strict_lower_idx] = 0.0
@@ -1281,7 +1414,7 @@ function quic3(emp_data,
 end
 
 # First version
-function admm(emp_data, solvers, dual_updates, vars0; compute_bmap = [], rho = 1.0, tol = 1e-6, bb = false, dual_balancing = false, mu = 10.0, tau = 2.0)
+function admm_old(emp_data, solvers, dual_updates, vars0; compute_bmap = [], rho = 1.0, tol = 1e-6, bb = false, dual_balancing = false, mu = 10.0, tau = 2.0)
 
   p = emp_data.p
 
@@ -1313,6 +1446,329 @@ function admm(emp_data, solvers, dual_updates, vars0; compute_bmap = [], rho = 1
     end
     res_norm = sqrt(res_norm)
     bmap = compute_bmap(vars, rho)
+    dual_res = rho * (bmap - bmap_old) # this is not true in general
+    dual_res_norm = vecnorm(dual_res)
+    bmap_old = copy(bmap)
+
+    # Check for convergence
+    println("Norm difference: ", vecnorm(vars - vars_old))
+    println("Primal residual: ", res_norm)
+    println("Dual residual: ", dual_res_norm)
+    #= if vecnorm(vars - vars_old) < tol =#
+    if res_norm < tol && dual_res_norm < tol
+      converged = true
+    else
+      println("Iteration ", counter)
+      counter += 1
+    end
+
+    # Residual balancing
+    if dual_balancing
+      if res_norm > mu * dual_res_norm
+        rho *= tau
+      elseif dual_res_norm > mu * res_norm
+        rho /= tau
+      end
+    end
+
+    vars_old = deepcopy(vars)
+    println("rho = ", rho)
+  end
+
+  return vars
+end
+
+type ConstraintData_old
+  B::Array{Float64,2}
+  Breds::Array{Array{Float64,2},1}
+  Bredst::Array{Array{Float64,2},1}
+  Bmuldiff::Array{Array{Float64,2},1}
+  Ainv::Array{Float64,2}
+  Ainv2::Array{Float64,2}
+  diff::Array{Float64,2}
+  diff_sum::Array{Float64,2}
+  Gmat::Array{Float64,2}
+  Gmat_sum::Array{Float64,2}
+  initialize_array::Bool
+end
+
+function ConstraintData_old(p)
+  return ConstraintData_old(zeros(p, p), [], [], [], zeros(p,p), zeros(p,p), zeros(p,p), zeros(p,p), zeros(p,p), zeros(p,p), true)
+end
+
+function constr_least_sq_old(x, g, vars, duals, rho, emp_data, data::ConstraintData_old, Us_ind = Us_ind, Js_ind = Js_ind; low_rank = false)
+  """
+  Calculate the least squares function linking B and the thetas, for use with lbfgsb
+  """
+
+  # Shorthands
+  E = emp_data.E
+  find_offdiag_idx = emp_data.find_offdiag_idx
+
+  compute_grad = length(g) > 0
+  data.initialize_array = length(data.Breds) == 0
+  val = 0.0
+  fill!(data.B, 0.0)
+  vec2mat(x, emp_data, inplace = data.B)
+ 
+  if compute_grad
+    fill!(g, 0.0)
+    if low_rank
+      fill!(data.diff_sum, 0.0)
+      fill!(data.Gmat_sum, 0.0)
+    end
+  end
+ 
+  (p1, p2) = size(data.Ainv)
+  if low_rank
+    # Assemble (I - B)
+    fill!(data.Ainv, 0.0)
+    for i = 1:p1
+      data.Ainv[i,i] = 1.0
+    end
+
+    data.Ainv[:] .-= data.B[:]
+    BLAS.gemm!('T', 'N', 1.0, data.Ainv, data.Ainv, 0.0, data.Ainv2)
+  end
+
+  for e = 1:E
+    fill!(data.diff, 0.0)
+    if low_rank
+      if data.initialize_array
+        push!(data.Breds, zeros(length(Js_ind[e]), p2))
+        push!(data.Bmuldiff, zeros(length(Js_ind[e]), p2))
+        push!(data.Bredst, zeros(p1, length(Js_ind[e])))
+      end
+      copy!(data.Breds[e], view(data.B, Js_ind[e], :))
+      transpose!(data.Bredst[e], data.Breds[e])
+      copy!(data.diff, data.Ainv2)
+      scale!(data.diff, -1.0)
+      BLAS.axpy!(-1.0, data.Breds[e], view(data.diff, Js_ind[e], :))
+      BLAS.axpy!(-1.0, data.Bredst[e], view(data.diff, :, Js_ind[e]))
+      #= println(size(data.Bredst[e]), ", ", size(data.Breds[e])) =#
+      BLAS.gemm!('N', 'N', 1.0, data.Bredst[e], data.Breds[e], 1.0, data.diff)
+    else
+      fill!(data.Ainv, 0.0)
+      for i = 1:p1
+        data.Ainv[i, i] = 1
+      end
+
+      #= @inbounds for col in 1:p2 =#
+      #=   @simd for row in Us_ind[e] =#
+      #=     data.Ainv[row, col] -= data.B[row, col] =#
+      #=   end =#
+      #= end =#
+      BLAS.axpy!(-1.0, view(data.B, Us_ind[e], :), view(data.Ainv, Us_ind[e], :))
+
+      #= Ainv = eye(p) - Us[e]*data.B =#
+      #= println("Difference in Ainv: ", vecnorm(Ainv - data.Ainv)) =#
+      #= println(Ainv) =#
+      #= println(data.Ainv) =#
+      #= data.Ainv = Ainv =#
+
+      #= diff = vars[e] - Ainv'*Ainv + duals[e]/rho =#
+      BLAS.gemm!('T', 'N', -1.0, data.Ainv, data.Ainv, 0.0, data.diff)
+      #= data.diff[:] = -data.Ainv'*data.Ainv =#
+      #= @inbounds @simd for I in eachindex(data.diff) =#
+      #=   data.diff[I] += vars[e][I] + duals[e][I]/rho =#
+      #= end =#
+    end
+    BLAS.axpy!(1.0, vars[e], data.diff)
+    BLAS.axpy!(1.0/rho, duals[e], data.diff)
+    #= data.diff .+= vars[e] + duals[e]/rho =#
+    #= val += vecnorm(diff)^2 =#
+    val += vecnorm(data.diff)^2
+    if compute_grad
+      fill!(data.Gmat, 0.0)
+      if low_rank
+        BLAS.axpy!(1.0, data.diff, data.diff_sum)
+        BLAS.axpy!(-2.0, view(data.diff, Js_ind[e], :), view(data.Gmat_sum, Js_ind[e], :))
+        BLAS.gemm!('N', 'N', 2.0, data.Breds[e], data.diff, 0.0, data.Bmuldiff[e])
+        BLAS.axpy!(1.0, data.Bmuldiff[e], view(data.Gmat_sum, Js_ind[e], :))
+      else
+        BLAS.gemm!('N', 'N', 2.0, data.Ainv, data.diff, 0.0, data.Gmat)
+        data.Gmat[Js_ind[e],:] = 0.0
+        BLAS.axpy!(1.0, view(data.Gmat, find_offdiag_idx), g)
+      end
+    end
+  end
+  data.initialize_array = false
+
+  if compute_grad && low_rank
+    BLAS.gemm!('N', 'N', 2.0, data.Ainv, data.diff_sum, 1.0, data.Gmat_sum)
+    copy!(g, view(data.Gmat_sum, find_offdiag_idx))
+  end
+
+  val *= rho/2
+  if compute_grad
+    scale!(g, rho)
+  end
+ 
+  #= println("Val = ", val) =#
+  #= println("g = ", g) =#
+  return val
+end
+
+type ADMMData_old
+  quic_data
+  constr_data
+  B::Array{Float64,2}
+  theta_prime::Array{Float64,2}
+end
+
+function ADMMData_old(emp_data, quic_data, constr_data)
+  return ADMMData_old(
+                  QuadraticPenaltyData(emp_data.p),
+                  constr_data,
+                  zeros(emp_data.p, emp_data.p),
+                  zeros(emp_data.p, emp_data.p)
+                 )
+end
+
+function min_admm_old(emp_data, admm_data, lambda, B0, rho)
+
+  # Shorthands for variables
+  E = emp_data.E
+  p = emp_data.p
+  sigmas_emp = emp_data.sigmas_emp
+  B = admm_data.B
+  theta_prime = admm_data.theta_prime
+  I = emp_data.I
+  Us = emp_data.Us
+  theta_prime = admm_data.theta_prime
+  qu_data = admm_data.quic_data
+
+  function solve_ml_quic!(vars, duals, rho, sigmas, e)
+    #= println("Running quic for ", e) =#
+    vec2mat(vars[end], emp_data, inplace = B)
+    theta_prime[:] = (I - Us[e]*B)'*(I - Us[e]*B) - duals[e]/rho
+    theta = quic(emp_data, qu_data, sigmas[e],
+                  theta_prime = theta_prime, rho = rho, lambda = lambda,
+                  theta0 = vars[e], tol = 1e-2, inner_tol = 1e-6)
+    copy!(vars[e], theta)
+  end
+
+  #= constr_data = ConstraintData(p) =#
+  constr_data = admm_data.constr_data
+
+  function solve_constr!(vars, duals, rho)
+    function lbfgs_obj(x, g)
+      ret = constr_least_sq_old(x, g, vars, duals, rho, emp_data, constr_data, emp_data.Us_ind, emp_data.Js_ind, low_rank = false)
+      return ret
+    end
+    #= Profile.clear() =#
+    #= @profile (minf, minx, ret) = Liblbfgs.lbfgs(vars[end], lbfgs_obj, print_stats = false) =#
+    (minf, minx, ret) = lbfgsb(lbfgs_obj, vars[end])
+    vars[end][:] = minx
+  end
+
+  function compute_bmap(vars, rho)
+    B = vec2mat(vars[end], emp_data)
+    ret = zeros(p^2*E)
+    for e = 1:E
+      Ainv = I - emp_data.Us[e]*B
+      ret[1 + (e-1)*p^2:e*p^2] = Ainv'*Ainv
+    end
+    return ret
+  end
+
+  function dual_update(emp_data, vars, e)
+    B = vec2mat(vars[end], emp_data)
+    Ainv = I - emp_data.Us[e] * B
+    return vars[e] - Ainv' * Ainv
+  end
+
+  solvers = []
+  compute_grads_h = []
+  compute_grads_g = []
+  for e = 1:E
+    push!(solvers, (vars, duals, rho) -> solve_ml_quic!(vars, duals, rho, sigmas_emp, e))
+    #= push!(compute_grads_h, (g, vars) -> compute_grad_h!(g, vars, e)) =#
+    #= push!(compute_grads_g, (g, vars) -> compute_grad_g!(g, vars, e)) =#
+  end
+
+  vars = []
+  duals = []
+  for e = 1:E
+    push!(vars, inv(sigmas_emp[e]))
+    #= dual = 0.1*randn(p, p) =#
+    dual = zeros(p, p)
+    dual = (dual + dual')/2
+    push!(duals, dual)
+  end
+  #= B0 = 100 * triu(randn(p,p), 1) =#
+  push!(vars, mat2vec(B0, emp_data))
+  #= push!(vars, zeros(p*(p-1))) =#
+
+  #= solve_constr!(vars, duals, rho) =#
+  #= B_constr = vec2mat(vars[end]) =#
+  #= println(vecnorm(vars[end] - mat2vec(B))) =#
+
+  dual_updates = []
+  for e = 1:E
+    push!(dual_updates, vars -> dual_update(emp_data, vars, e))
+  end
+  push!(solvers, solve_constr!)
+
+  vars_result = admm_old(emp_data, solvers, dual_updates, vars, rho = rho, tol = 1e-2, compute_bmap = compute_bmap, dual_balancing = true, mu = 5.0, tau = 1.5)
+  B_admm = vec2mat(vars_result[end], emp_data)
+  #= println(vecnorm(vars_result[end] - mat2vec(B))) =#
+  return B_admm
+end
+
+# Second version
+function admm(emp_data, admm_data, solvers, dual_update, vars0; compute_bmap = [])
+
+  # Shortcuts
+  p = emp_data.p
+  rho = admm_data.rho
+  tol = admm_data.tol
+  dual_balancing = admm_data.dual_balancing
+  mu = admm_data.mu
+  tau = admm_data.tau
+  duals = admm_data.duals
+
+  converged = false
+  vars = deepcopy(vars0)
+  vars_old = deepcopy(vars0)
+  # Init duals
+  #= duals = [] =#
+  #= for e = 1:emp_data.E =#
+  #=   push!(duals, zeros(p, p)) =#
+  #= end =#
+  primal_residuals = deepcopy(duals)
+  dual_update(admm_data, vars, primal_residuals, compute_B_only = true)
+  bmap_old = fill(0.0, emp_data.E*p^2)
+  compute_bmap(admm_data, vars, rho, bmap_old)
+  bmap = copy(bmap_old)
+  counter = 1
+
+  while ~converged
+    # Minimization steps
+    for s! in solvers
+      s!(vars, duals, rho)
+    end
+
+    # Dual updates
+    res_norm = 0.0
+    dual_update(admm_data, vars, primal_residuals)
+    for e = 1:length(duals)
+      pres = primal_residuals[e]
+      res_norm += vecnorm(pres)^2
+      dual = duals[e]
+      dual[:] = dual + rho * pres
+      #= dual[:] = (dual + dual')/2 =#
+      symmetrize!(dual)
+    end
+    #= for (dual, dual_update, pres) in zip(duals, dual_updates, primal_residuals) =#
+    #=   pres[:] = dual_update(vars) =#
+    #=   res_norm += vecnorm(pres)^2 =#
+    #=   dual[:] = dual + rho * pres =#
+    #=   dual[:] = (dual + dual')/2 =#
+    #= end =#
+    res_norm = sqrt(res_norm)
+    compute_bmap(admm_data, vars, rho, bmap)
+    #= bmap = compute_bmap(vars, rho) =#
     dual_res = rho * (bmap - bmap_old) # this is not true in general
     dual_res_norm = vecnorm(dual_res)
     bmap_old = copy(bmap)
@@ -1396,6 +1852,7 @@ function constr_least_sq(x, g, vars, duals, rho, emp_data, data::ConstraintData,
 
     data.Ainv[:] .-= data.B[:]
     BLAS.gemm!('T', 'N', 1.0, data.Ainv, data.Ainv, 0.0, data.Ainv2)
+    symmetrize!(data.Ainv2)
   end
 
   for e = 1:E
@@ -1414,6 +1871,7 @@ function constr_least_sq(x, g, vars, duals, rho, emp_data, data::ConstraintData,
       BLAS.axpy!(-1.0, data.Bredst[e], view(data.diff, :, Js_ind[e]))
       #= println(size(data.Bredst[e]), ", ", size(data.Breds[e])) =#
       BLAS.gemm!('N', 'N', 1.0, data.Bredst[e], data.Breds[e], 1.0, data.diff)
+      symmetrize!(data.diff)
     else
       fill!(data.Ainv, 0.0)
       for i = 1:p1
@@ -1435,6 +1893,7 @@ function constr_least_sq(x, g, vars, duals, rho, emp_data, data::ConstraintData,
 
       #= diff = vars[e] - Ainv'*Ainv + duals[e]/rho =#
       BLAS.gemm!('T', 'N', -1.0, data.Ainv, data.Ainv, 0.0, data.diff)
+      symmetrize!(data.diff)
       #= data.diff[:] = -data.Ainv'*data.Ainv =#
       #= @inbounds @simd for I in eachindex(data.diff) =#
       #=   data.diff[I] += vars[e][I] + duals[e][I]/rho =#
@@ -1479,327 +1938,7 @@ end
 type ADMMData
   quic_data
   constr_data
-  B::Array{Float64,2}
-  theta_prime::Array{Float64,2}
-end
-
-function ADMMData(emp_data, quic_data, constr_data)
-  return ADMMData(
-                  QuadraticPenaltyData(emp_data.p),
-                  constr_data,
-                  zeros(emp_data.p, emp_data.p),
-                  zeros(emp_data.p, emp_data.p)
-                 )
-end
-
-function min_admm(emp_data, admm_data, lambda, B0, rho)
-
-  # Shorthands for variables
-  E = emp_data.E
-  p = emp_data.p
-  sigmas_emp = emp_data.sigmas_emp
-  B = admm_data.B
-  theta_prime = admm_data.theta_prime
-  I = emp_data.I
-  Us = emp_data.Us
-  theta_prime = admm_data.theta_prime
-  qu_data = admm_data.quic_data
-
-  function solve_ml_quic!(vars, duals, rho, sigmas, e)
-    println("Running quic for ", e)
-    vec2mat(vars[end], emp_data, inplace = B)
-    theta_prime[:] = (I - Us[e]*B)'*(I - Us[e]*B) - duals[e]/rho
-    theta = quic3(emp_data, qu_data, sigmas[e],
-                  theta_prime = theta_prime, rho = rho, lambda = lambda,
-                  theta0 = vars[e], print_stats = false,
-                  tol = 1e-2, inner_tol = 1e-6)
-    copy!(vars[e], theta)
-  end
-
-  #= constr_data = ConstraintData(p) =#
-  constr_data = admm_data.constr_data
-
-  function solve_constr!(vars, duals, rho)
-    function lbfgs_obj(x, g)
-      ret = constr_least_sq(x, g, vars, duals, rho, emp_data, constr_data, emp_data.Us_ind, emp_data.Js_ind, low_rank = false)
-      return ret
-    end
-    #= Profile.clear() =#
-    #= @profile (minf, minx, ret) = Liblbfgs.lbfgs(vars[end], lbfgs_obj, print_stats = false) =#
-    (minf, minx, ret) = lbfgsb(lbfgs_obj, vars[end])
-    vars[end][:] = minx
-  end
-
-  function compute_bmap(vars, rho)
-    B = vec2mat(vars[end], emp_data)
-    ret = zeros(p^2*E)
-    for e = 1:E
-      Ainv = I - emp_data.Us[e]*B
-      ret[1 + (e-1)*p^2:e*p^2] = Ainv'*Ainv
-    end
-    return ret
-  end
-
-  function dual_update(emp_data, vars, e)
-    B = vec2mat(vars[end], emp_data)
-    Ainv = I - emp_data.Us[e] * B
-    return vars[e] - Ainv' * Ainv
-  end
-
-  solvers = []
-  compute_grads_h = []
-  compute_grads_g = []
-  for e = 1:E
-    push!(solvers, (vars, duals, rho) -> solve_ml_quic!(vars, duals, rho, sigmas_emp, e))
-    #= push!(compute_grads_h, (g, vars) -> compute_grad_h!(g, vars, e)) =#
-    #= push!(compute_grads_g, (g, vars) -> compute_grad_g!(g, vars, e)) =#
-  end
-
-  vars = []
-  duals = []
-  for e = 1:E
-    push!(vars, inv(sigmas_emp[e]))
-    #= dual = 0.1*randn(p, p) =#
-    dual = zeros(p, p)
-    dual = (dual + dual')/2
-    push!(duals, dual)
-  end
-  #= B0 = 100 * triu(randn(p,p), 1) =#
-  push!(vars, mat2vec(B0, emp_data))
-  #= push!(vars, zeros(p*(p-1))) =#
-
-  #= solve_constr!(vars, duals, rho) =#
-  #= B_constr = vec2mat(vars[end]) =#
-  #= println(vecnorm(vars[end] - mat2vec(B))) =#
-
-  dual_updates = []
-  for e = 1:E
-    push!(dual_updates, vars -> dual_update(emp_data, vars, e))
-  end
-  push!(solvers, solve_constr!)
-
-  vars_result = admm(emp_data, solvers, dual_updates, vars, rho = rho, tol = 1e-2, compute_bmap = compute_bmap, dual_balancing = true, mu = 5.0, tau = 1.5)
-  B_admm = vec2mat(vars_result[end], emp_data)
-  #= println(vecnorm(vars_result[end] - mat2vec(B))) =#
-  return B_admm
-end
-
-# Second version
-function admm2(emp_data, admm_data, solvers, dual_update, vars0; compute_bmap = [])
-
-  # Shortcuts
-  p = emp_data.p
-  rho = admm_data.rho
-  tol = admm_data.tol
-  dual_balancing = admm_data.dual_balancing
-  mu = admm_data.mu
-  tau = admm_data.tau
-
-  converged = false
-  vars = deepcopy(vars0)
-  vars_old = deepcopy(vars0)
-  duals = []
-  for e = 1:emp_data.E
-    push!(duals, zeros(p, p))
-  end
-  primal_residuals = deepcopy(duals)
-  dual_update(admm_data, vars, primal_residuals, compute_B_only = true)
-  bmap_old = fill(0.0, emp_data.E*p^2)
-  compute_bmap(admm_data, vars, rho, bmap_old)
-  bmap = copy(bmap_old)
-  counter = 1
-
-  while ~converged
-    # Minimization steps
-    for s! in solvers
-      s!(vars, duals, rho)
-    end
-
-    # Dual updates
-    res_norm = 0.0
-    dual_update(admm_data, vars, primal_residuals)
-    for e = 1:length(duals)
-      pres = primal_residuals[e]
-      res_norm += vecnorm(pres)^2
-      dual = duals[e]
-      dual[:] = dual + rho * pres
-      dual[:] = (dual + dual')/2
-    end
-    #= for (dual, dual_update, pres) in zip(duals, dual_updates, primal_residuals) =#
-    #=   pres[:] = dual_update(vars) =#
-    #=   res_norm += vecnorm(pres)^2 =#
-    #=   dual[:] = dual + rho * pres =#
-    #=   dual[:] = (dual + dual')/2 =#
-    #= end =#
-    res_norm = sqrt(res_norm)
-    compute_bmap(admm_data, vars, rho, bmap)
-    #= bmap = compute_bmap(vars, rho) =#
-    dual_res = rho * (bmap - bmap_old) # this is not true in general
-    dual_res_norm = vecnorm(dual_res)
-    bmap_old = copy(bmap)
-
-    # Check for convergence
-    println("Norm difference: ", vecnorm(vars - vars_old))
-    println("Primal residual: ", res_norm)
-    println("Dual residual: ", dual_res_norm)
-    #= if vecnorm(vars - vars_old) < tol =#
-    if res_norm < tol && dual_res_norm < tol
-      converged = true
-    else
-      println("Iteration ", counter)
-      counter += 1
-    end
-
-    # Residual balancing
-    if dual_balancing
-      if res_norm > mu * dual_res_norm
-        rho *= tau
-      elseif dual_res_norm > mu * res_norm
-        rho /= tau
-      end
-    end
-
-    vars_old = deepcopy(vars)
-    println("rho = ", rho)
-  end
-
-  return vars
-end
-
-type ConstraintData2
-  B::Array{Float64,2}
-  Breds::Array{Array{Float64,2},1}
-  Bredst::Array{Array{Float64,2},1}
-  Bmuldiff::Array{Array{Float64,2},1}
-  Ainv::Array{Float64,2}
-  Ainv2::Array{Float64,2}
-  diff::Array{Float64,2}
-  diff_sum::Array{Float64,2}
-  Gmat::Array{Float64,2}
-  Gmat_sum::Array{Float64,2}
-  initialize_array::Bool
-end
-
-function ConstraintData2(p)
-  return ConstraintData2(zeros(p, p), [], [], [], zeros(p,p), zeros(p,p), zeros(p,p), zeros(p,p), zeros(p,p), zeros(p,p), true)
-end
-
-function constr_least_sq2(x, g, vars, duals, rho, emp_data, data::ConstraintData2, Us_ind = Us_ind, Js_ind = Js_ind; low_rank = false)
-  """
-  Calculate the least squares function linking B and the thetas, for use with lbfgsb
-  """
-
-  # Shorthands
-  E = emp_data.E
-  find_offdiag_idx = emp_data.find_offdiag_idx
-
-  compute_grad = length(g) > 0
-  data.initialize_array = length(data.Breds) == 0
-  val = 0.0
-  fill!(data.B, 0.0)
-  vec2mat(x, emp_data, inplace = data.B)
- 
-  if compute_grad
-    fill!(g, 0.0)
-    if low_rank
-      fill!(data.diff_sum, 0.0)
-      fill!(data.Gmat_sum, 0.0)
-    end
-  end
- 
-  (p1, p2) = size(data.Ainv)
-  if low_rank
-    # Assemble (I - B)
-    fill!(data.Ainv, 0.0)
-    for i = 1:p1
-      data.Ainv[i,i] = 1.0
-    end
-
-    data.Ainv[:] .-= data.B[:]
-    BLAS.gemm!('T', 'N', 1.0, data.Ainv, data.Ainv, 0.0, data.Ainv2)
-  end
-
-  for e = 1:E
-    fill!(data.diff, 0.0)
-    if low_rank
-      if data.initialize_array
-        push!(data.Breds, zeros(length(Js_ind[e]), p2))
-        push!(data.Bmuldiff, zeros(length(Js_ind[e]), p2))
-        push!(data.Bredst, zeros(p1, length(Js_ind[e])))
-      end
-      copy!(data.Breds[e], view(data.B, Js_ind[e], :))
-      transpose!(data.Bredst[e], data.Breds[e])
-      copy!(data.diff, data.Ainv2)
-      scale!(data.diff, -1.0)
-      BLAS.axpy!(-1.0, data.Breds[e], view(data.diff, Js_ind[e], :))
-      BLAS.axpy!(-1.0, data.Bredst[e], view(data.diff, :, Js_ind[e]))
-      #= println(size(data.Bredst[e]), ", ", size(data.Breds[e])) =#
-      BLAS.gemm!('N', 'N', 1.0, data.Bredst[e], data.Breds[e], 1.0, data.diff)
-    else
-      fill!(data.Ainv, 0.0)
-      for i = 1:p1
-        data.Ainv[i, i] = 1
-      end
-
-      #= @inbounds for col in 1:p2 =#
-      #=   @simd for row in Us_ind[e] =#
-      #=     data.Ainv[row, col] -= data.B[row, col] =#
-      #=   end =#
-      #= end =#
-      BLAS.axpy!(-1.0, view(data.B, Us_ind[e], :), view(data.Ainv, Us_ind[e], :))
-
-      #= Ainv = eye(p) - Us[e]*data.B =#
-      #= println("Difference in Ainv: ", vecnorm(Ainv - data.Ainv)) =#
-      #= println(Ainv) =#
-      #= println(data.Ainv) =#
-      #= data.Ainv = Ainv =#
-
-      #= diff = vars[e] - Ainv'*Ainv + duals[e]/rho =#
-      BLAS.gemm!('T', 'N', -1.0, data.Ainv, data.Ainv, 0.0, data.diff)
-      #= data.diff[:] = -data.Ainv'*data.Ainv =#
-      #= @inbounds @simd for I in eachindex(data.diff) =#
-      #=   data.diff[I] += vars[e][I] + duals[e][I]/rho =#
-      #= end =#
-    end
-    BLAS.axpy!(1.0, vars[e], data.diff)
-    BLAS.axpy!(1.0/rho, duals[e], data.diff)
-    #= data.diff .+= vars[e] + duals[e]/rho =#
-    #= val += vecnorm(diff)^2 =#
-    val += vecnorm(data.diff)^2
-    if compute_grad
-      fill!(data.Gmat, 0.0)
-      if low_rank
-        BLAS.axpy!(1.0, data.diff, data.diff_sum)
-        BLAS.axpy!(-2.0, view(data.diff, Js_ind[e], :), view(data.Gmat_sum, Js_ind[e], :))
-        BLAS.gemm!('N', 'N', 2.0, data.Breds[e], data.diff, 0.0, data.Bmuldiff[e])
-        BLAS.axpy!(1.0, data.Bmuldiff[e], view(data.Gmat_sum, Js_ind[e], :))
-      else
-        BLAS.gemm!('N', 'N', 2.0, data.Ainv, data.diff, 0.0, data.Gmat)
-        data.Gmat[Js_ind[e],:] = 0.0
-        BLAS.axpy!(1.0, view(data.Gmat, find_offdiag_idx), g)
-      end
-    end
-  end
-  data.initialize_array = false
-
-  if compute_grad && low_rank
-    BLAS.gemm!('N', 'N', 2.0, data.Ainv, data.diff_sum, 1.0, data.Gmat_sum)
-    copy!(g, view(data.Gmat_sum, find_offdiag_idx))
-  end
-
-  val *= rho/2
-  if compute_grad
-    scale!(g, rho)
-  end
- 
-  #= println("Val = ", val) =#
-  #= println("g = ", g) =#
-  return val
-end
-
-type ADMMData2
-  quic_data
-  constr_data
+  low_rank
   rho
   tol
   dual_balancing
@@ -1809,11 +1948,14 @@ type ADMMData2
   theta_prime::Array{Float64,2}
   #= theta::Array{Float64,2} =#
   Ainv2s::Array{Array{Float64,2},1}
+  B0::Array{Float64,2}
+  duals::Array{Array{Float64,2},1}
 end
 
-function ADMMData2(emp_data, constr_data, lambda)
-  data = ADMMData2(QuadraticPenaltyData(emp_data.p), # quic_data
+function ADMMData(emp_data, constr_data, lambda)
+  data = ADMMData(QuadraticPenaltyData(emp_data.p), # quic_data
                   constr_data, # constr_data
+                  false, # low_rank
                   1.0, # rho
                   1e-2, # tol
                   true, # dual_balancing
@@ -1823,6 +1965,8 @@ function ADMMData2(emp_data, constr_data, lambda)
                   zeros(emp_data.p, emp_data.p), # theta_prime
                   #= zeros(emp_data.p, emp_data.p), # theta =#
                   [zeros(emp_data.p, emp_data.p) for e = 1:emp_data.E], # Ainv2s
+                  zeros(p, p), # B0 
+                  [zeros(emp_data.p, emp_data.p) for e = 1:emp_data.E], # duals
                  )
 
   data.quic_data.lambda = lambda
@@ -1848,8 +1992,11 @@ function compute_Ainv2s(emp_data, admm_data, vars; low_rank = false)
       data.Ainv[i,i] = 1.0
     end
 
-    data.Ainv[:] .-= data.B[:]
-    BLAS.gemm!('T', 'N', 1.0, data.Ainv, data.Ainv, 0.0, data.Ainv2)
+    #= data.Ainv[:] .-= data.B[:] =#
+    BLAS.axpy!(-1.0, data.B, data.Ainv)
+    #= BLAS.gemm!('T', 'N', 1.0, data.Ainv, data.Ainv, 0.0, data.Ainv2) =#
+    BLAS.syrk!('U', 'T', 1.0, data.Ainv, 0.0, data.Ainv2)
+    LinAlg.copytri!(data.Ainv2, 'U')
   end
 
   for e = 1:E
@@ -1862,11 +2009,17 @@ function compute_Ainv2s(emp_data, admm_data, vars; low_rank = false)
       end
       copy!(data.Breds[e], view(data.B, Js_ind[e], :))
       transpose!(data.Bredst[e], data.Breds[e])
-      copy!(data.diff, data.Ainv2)
+      #= copy!(data.diff, data.Ainv2) =#
+      BLAS.syrk!('U', 'T', -1.0, data.Breds[e], 0.0, data.diff)
+      LinAlg.copytri!(data.diff, 'U')
       BLAS.axpy!(1.0, data.Breds[e], view(data.diff, Js_ind[e], :))
       BLAS.axpy!(1.0, data.Bredst[e], view(data.diff, :, Js_ind[e]))
+      BLAS.axpy!(1.0, data.Ainv2, data.diff)
+      # Symmetrize
+      symmetrize!(data.diff)
+      #= println("Symmetry diff: ", vecnorm(data.diff - data.diff')) =#
       #= println(size(data.Bredst[e]), ", ", size(data.Breds[e])) =#
-      BLAS.gemm!('N', 'N', -1.0, data.Bredst[e], data.Breds[e], 1.0, data.diff)
+      #= BLAS.gemm!('N', 'N', -1.0, data.Bredst[e], data.Breds[e], 1.0, data.diff) =#
       copy!(admm_data.Ainv2s[e], data.diff)
     else
       fill!(data.Ainv, 0.0)
@@ -1874,14 +2027,16 @@ function compute_Ainv2s(emp_data, admm_data, vars; low_rank = false)
         data.Ainv[i, i] = 1
       end
       BLAS.axpy!(-1.0, view(data.B, Us_ind[e], :), view(data.Ainv, Us_ind[e], :))
-      BLAS.gemm!('T', 'N', 1.0, data.Ainv, data.Ainv, 0.0, data.diff)
+      #= BLAS.gemm!('T', 'N', 1.0, data.Ainv, data.Ainv, 0.0, data.diff) =#
+      BLAS.syrk!('U', 'T', 1.0, data.Ainv, 0.0, data.diff)
+      LinAlg.copytri!(data.diff, 'U')
       copy!(admm_data.Ainv2s[e], data.diff)
     end
   end
   data.initialize_array = false
 end
 
-function min_admm2(emp_data, admm_data, lambda, B0)
+function min_admm(emp_data, admm_data)
 
   # Shorthands for variables
   E = emp_data.E
@@ -1893,15 +2048,24 @@ function min_admm2(emp_data, admm_data, lambda, B0)
   Us = emp_data.Us
   theta_prime = admm_data.theta_prime
   qu_data = admm_data.quic_data
+  low_rank = admm_data.low_rank
+  B0 = admm_data.B0
+  duals = admm_data.duals
 
   function solve_ml_quic!(vars, duals, rho, sigmas, e)
-    println("Running quic for ", e)
+    #= println("Running quic for ", e) =#
     vec2mat(vars[end], emp_data, inplace = B)
     copy!(theta_prime, admm_data.Ainv2s[e])
     BLAS.axpy!(-1/rho, duals[e], theta_prime)
-    #= theta_prime[:] = (I - Us[e]*B)'*(I - Us[e]*B) - duals[e]/rho =#
-    copy!(vars[e], quic3(emp_data, qu_data, sigmas[e],
-                         theta_prime = theta_prime, rho = rho, print_stats = false))
+    #= println("dual = ", duals[e]) =#
+    qu_data.theta0 = copy(vars[e])
+    #= println("Theta_prime symmetric: ", vecnorm(theta_prime - theta_prime')) =#
+    #= theta_prime2 = (I - Us[e]*B)'*(I - Us[e]*B) - duals[e]/rho =#
+    #= println("Prime diff: ", vecnorm(theta_prime - theta_prime2)) =#
+    #= var_old = copy(vars[e]) =#
+    copy!(vars[e], quic(emp_data, qu_data, sigmas[e],
+                        theta_prime = theta_prime, rho = rho))
+    #= println("Diff: ", vecnorm(var_old - vars[e])) =#
     #= copy!(vars[e], theta) =#
   end
 
@@ -1910,13 +2074,23 @@ function min_admm2(emp_data, admm_data, lambda, B0)
 
   function solve_constr!(vars, duals, rho)
     function lbfgs_obj(x, g)
-      ret = constr_least_sq2(x, g, vars, duals, rho, emp_data, constr_data, emp_data.Us_ind, emp_data.Js_ind, low_rank = false)
+      ret = constr_least_sq(x, g, vars, duals, rho, emp_data, constr_data, emp_data.Us_ind, emp_data.Js_ind, low_rank = low_rank)
       return ret
     end
     #= Profile.clear() =#
     #= @profile (minf, minx, ret) = Liblbfgs.lbfgs(vars[end], lbfgs_obj, print_stats = false) =#
-    (minf, minx, ret) = lbfgsb(lbfgs_obj, vars[end])
-    copy!(vars[end][:], minx)
+    #= var_old = copy(vars[end]) =#
+    (minf, minx, t, c, status) = lbfgsb(lbfgs_obj, vars[end], iprint=-1, pgtol = 1e-5, factr = 1e7)
+    #= println(status) =#
+    # Threshold
+    Bloc = vars[end]
+    Bloc[abs(Bloc) .< 1e-6] = 0.0
+
+    #= copy!(view(vars[end],:), minx) =#
+    #= println(var_old) =#
+    #= println(minx) =#
+    #= vars[end][:] = copy(minx) =#
+    #= println("Diff: ", vecnorm(var_old-vars[end])) =#
   end
 
   #= function dual_update(emp_data, vars, e) =#
@@ -1926,12 +2100,19 @@ function min_admm2(emp_data, admm_data, lambda, B0)
   #= end =#
 
   function dual_update(admm_data, vars, primal_residuals; compute_B_only = false)
-    compute_Ainv2s(emp_data, admm_data, vars, low_rank = true)
+    compute_Ainv2s(emp_data, admm_data, vars, low_rank = low_rank)
+    #= Ainv2s_comp = [] =#
+    #= B = vec2mat(vars[end], emp_data) =#
+    #= for e = 1:E =#
+    #=   Ainv = I - emp_data.Us[e] * B =#
+    #=   push!(Ainv2s_comp, vars[e] - Ainv'*Ainv) =#
+    #= end =#
     if !compute_B_only
       for e = 1:E
         primal_residuals[e][:] = vars[e] - admm_data.Ainv2s[e]
       end
     end
+    #= println("Diff: ", vecnorm(Ainv2s_comp - primal_residuals)) =#
   end
 
   function compute_bmap(admm_data, vars, rho, bmap)
@@ -1950,7 +2131,7 @@ function min_admm2(emp_data, admm_data, lambda, B0)
   end
 
   vars = []
-  duals = []
+  #= duals = [] =#
   chol = zeros(p, p)
   chol2 = zeros(p, p)
   for e = 1:E
@@ -1963,9 +2144,9 @@ function min_admm2(emp_data, admm_data, lambda, B0)
     BLAS.axpy!(1.0, chol2, chol)
     push!(vars, copy(chol))
     #= dual = 0.1*randn(p, p) =#
-    dual = zeros(p, p)
+    #= dual = zeros(p, p) =#
     #= dual = (dual + dual')/2 =#
-    push!(duals, dual)
+    #= push!(duals, dual) =#
   end
   #= B0 = 100 * triu(randn(p,p), 1) =#
   push!(vars, mat2vec(B0, emp_data))
@@ -1973,14 +2154,106 @@ function min_admm2(emp_data, admm_data, lambda, B0)
 
   push!(solvers, solve_constr!)
 
-  vars_result = admm2(emp_data, admm_data, solvers, dual_update, vars, compute_bmap = compute_bmap)
+  vars_result = admm(emp_data, admm_data, solvers, dual_update, vars, compute_bmap = compute_bmap)
   B_admm = vec2mat(vars_result[end], emp_data)
   #= println(vecnorm(vars_result[end] - mat2vec(B))) =#
   return B_admm
 end
 
-function min_admm_oracle(emp_data, admm_data, B0, lambdas)
-  
+function min_admm_oracle(pop_data, emp_data, admm_data, lambdas)
+  errors = zeros(length(lambdas))
+  Bs = []
+  B_admm = copy(admm_data.B0)
+  for i = 1:length(lambdas)
+    println("lambda = ", lambdas[i])
+    admm_data.B0 = copy(B_admm)
+    admm_data.quic_data.lambda = lambdas[i]
+    B_admm = copy(min_admm(emp_data, admm_data))
+    push!(Bs, B_admm)
+    errors[i] = vecnorm(B_admm - pop_data.B)
+  end
+
+  (err, ind) = findmin(errors)
+  return (Bs[ind], err, lambdas[ind], errors)
+end
+
+function min_constr_lh_oracle(pop_data, emp_data, lh_data, lambdas)
+  errors = zeros(length(lambdas))
+  Bs = []
+  B_lh = copy(lh_data.B0)
+  for i = 1:length(lambdas)
+    lh_data.lambda = lambdas[i]
+    lh_data.B0 = copy(B_lh)
+    B_lh = copy(min_constraint_lh(emp_data, lh_data))
+    push!(Bs, B_lh)
+    errors[i] = vecnorm(B_lh - pop_data.B)
+  end
+
+  (err, ind) = findmin(errors)
+  return (Bs[ind], err, lambdas[ind], errors)
+end
+
+function combined_oracle(pop_data, emp_data, admm_data, lh_data, lambdas)
+  (B1, err1, lambda1, errors1) = min_admm_oracle(pop_data, emp_data, admm_data, lambdas)
+  lh_data.x_base = mat2vec(B1, emp_data)
+  lh_data.upper_bound = vecnorm(pop_data.B - B1)^2
+  lh_data.B0 = copy(B1)
+  (B2, err2, lambda2, errors2) = min_constr_lh_oracle(pop_data, emp_data, lh_data, lambdas) 
+  return (B1, B2, err1, err2, lambda1, lambda2, errors1, errors2)
+end
+
+# LLC functionality
+function delete_shift_ind(l, i)
+  return union(l[l .< i], l[l .> i] - 1)
+end
+
+function llc(pop_data, emp_data, lambdas)
+  # Shortcuts
+  p = emp_data.p
+  E = emp_data.E
+  Us_ind = emp_data.Us_ind
+  Js_ind = emp_data.Js_ind
+  sigmas = emp_data.sigmas_emp
+
+  Bs = [zeros(p,p) for i in 1:length(lambdas)]
+  #= B = zeros(p, p) =#
+
+  for u = 1:p
+    T::Array{Float64,2} = fill(0.0, 0, p-1)
+    t::Array{Float64,1} = fill(0.0, 0)
+    for e = 1:E
+      if u in Us_ind[e]
+        for i in Js_ind[e]
+          row = zeros(p-1)
+          target_elem_inds = delete_shift_ind(Us_ind[e], u)
+          source_elem_inds = setdiff(Us_ind[e], u)
+          copy!(view(row, target_elem_inds), view(sigmas[e], i, source_elem_inds))
+          #= copy!(row[target_elem_inds], view(sigmas[e], i, source_elem_inds)) =#
+          row[i <= u ? i : i - 1] = 1.0
+          T = vcat(T, row')
+          t = vcat(t, sigmas[e][i, u])
+        end
+      end
+    end
+    #= b = T \ t =#
+    path = fit(LassoPath, T, t, λ = lambdas)
+    all_but_u = setdiff(1:p, u)
+    for ind in 1:length(lambdas)
+      copy!(view(Bs[ind], u, all_but_u), view(path.coefs, :, ind))
+    end
+    #= println(size(repmat(pop_data.B[u, all_but_u]', size(path.coefs, 2), 1))) =#
+    #= (err, ind) = findmin(sum((path.coefs - repmat(pop_data.B[u, all_but_u]', size(path.coefs, 1), 2)).^2)) =#
+    #= (err, ind) = findmin(sum(broadcast(-, path.coefs, reshape(pop_data.B[u, all_but_u], p-1, 1)).^2, 1)) =#
+    #= copy!(view(B, u, all_but_u), b) =#
+    #= copy!(view(B, u, all_but_u), view(path.coefs, :,ind)) =#
+  end
+
+  #= (err, ind) = findmin(sum(broadcast(-, path.coefs, reshape(pop_data.B[u, all_but_u], p-1, 1)).^2, 1)) =#
+  errors = [vecnorm(B - pop_data.B) for B in Bs]
+  (err, ind) = findmin(errors)
+  #= println(path.λ[ind]) =#
+
+  return (Bs[ind], err, lambdas[ind], errors)
 end
 
 end
