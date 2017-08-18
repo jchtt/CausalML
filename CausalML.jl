@@ -13,7 +13,7 @@ using StatsFuns
 using Base.LinAlg.LAPACK
 using Calculus
 #= using RGlasso =#
-using JLD
+#= using JLD =#
 using Lasso
 
 first_pass = true
@@ -1303,14 +1303,14 @@ function quic(emp_data,
       r += 1
     end
 
-    global first_pass
-    if first_pass && counter >= 2000
-      println("Sticky!")
-      println("theta_prime = ", theta_prime)
-      save("sticky_data2.jld", "D", data.D, "theta", data.theta, "sigma", sigma, "rho", rho, "lambda", lambda, "theta_prime", data.theta_prime, "Gmin", data.Gmin)
-      println(S)
-      first_pass = false
-    end
+    #= global first_pass =#
+    #= if first_pass && counter >= 2000 =#
+    #=   println("Sticky!") =#
+    #=   println("theta_prime = ", theta_prime) =#
+    #=   save("sticky_data2.jld", "D", data.D, "theta", data.theta, "sigma", sigma, "rho", rho, "lambda", lambda, "theta_prime", data.theta_prime, "Gmin", data.Gmin) =#
+    #=   println(S) =#
+    #=   first_pass = false =#
+    #= end =#
 
 
     # Sufficient decrease condition 
@@ -2135,14 +2135,20 @@ function min_admm(emp_data, admm_data)
   chol = zeros(p, p)
   chol2 = zeros(p, p)
   for e = 1:E
-    copy!(chol, sigmas_emp[e])
-    LAPACK.potrf!('U', chol)
-    LAPACK.potri!('U', chol)
-    triu!(chol)
-    transpose!(chol2, chol)
-    tril!(chol2, 1)
-    BLAS.axpy!(1.0, chol2, chol)
-    push!(vars, copy(chol))
+    if n > 2 * emp_data.n
+      # Inverses
+      copy!(chol, sigmas_emp[e])
+      LAPACK.potrf!('U', chol)
+      LAPACK.potri!('U', chol)
+      triu!(chol)
+      transpose!(chol2, chol)
+      tril!(chol2, 1)
+      BLAS.axpy!(1.0, chol2, chol)
+      push!(vars, copy(chol))
+    else
+      push!(vars, eye(p))
+    end
+
     #= dual = 0.1*randn(p, p) =#
     #= dual = zeros(p, p) =#
     #= dual = (dual + dual')/2 =#

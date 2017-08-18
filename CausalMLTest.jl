@@ -19,7 +19,7 @@ module CausalMLTest
 	using Calculus
   #= using Convex =#
   #= using SCS =#
-  using JLD
+  #= using JLD =#
 
 	const experiment_type = "binary"
 	const p = 100
@@ -283,70 +283,75 @@ module CausalMLTest
   function combined_oracle_screen()
     #= ps = [100] =#
     ps = [100]
+    #= ns = logspace(log10(50), 4, 10) =#
+    ns = 50
     #= ds = union(1:10, 12:2:20, 24:4:40) =#
     #= ds = 1:10 =#
     #= ds = [5,6] =#
     ds = 5
-    trials = 1
+    trials = 20
     global combined_results = []
-    lambdas = flipdim(logspace(-4, -1, 40), 1)
+    #= lambdas = flipdim(logspace(-4, -1, 40), 1) =#
+    lambdas = flipdim(logspace(-4, -1, 10), 1)
     #= lambdas = logspace(-4, -1, 3) =#
     #= lambdas = [1e-2] =#
-    for p in ps
-      for d in ds
-        errors1_trials = zeros(trials)
-        lambdas1_trials = zeros(trials)
-        errors2_trials = zeros(trials)
-        lambdas2_trials = zeros(trials)
-        errors_llc_trials = zeros(trials)
-        lambdas_llc_trials = zeros(trials)
-        ground_truth_norms = zeros(trials)
-        for trial in 1:trials
-          println("Generating data")
-          pop_data = PopulationData(p, d, matrix_std, experiment_type)
-          emp_data = EmpiricalData(pop_data, n)
-          ground_truth_norms[trial] = vecnorm(pop_data.B)
+    for n in ns
+      for p in ps
+        for d in ds
+          errors1_trials = zeros(trials)
+          lambdas1_trials = zeros(trials)
+          errors2_trials = zeros(trials)
+          lambdas2_trials = zeros(trials)
+          errors_llc_trials = zeros(trials)
+          lambdas_llc_trials = zeros(trials)
+          ground_truth_norms = zeros(trials)
+          for trial in 1:trials
+            println("Generating data")
+            pop_data = PopulationData(p, d, matrix_std, experiment_type)
+            emp_data = EmpiricalData(pop_data, n)
+            ground_truth_norms[trial] = vecnorm(pop_data.B)
 
-          B0 = zeros(p, p)
-          constr_data = ConstraintData(p)
-          admm_data = ADMMData(emp_data, constr_data, 1.0)
-          admm_data.tol = 5e-2
-          admm_data.quic_data.print_stats = false
-          admm_data.quic_data.tol = 1e-6
-          admm_data.B0 = B0
-          rho = 1.0
-          admm_data.rho = rho
-          admm_data.low_rank = experiment_type == "single"
-          lh_data = VanillaLHData(p, 1, B0)
-          lh_data.low_rank = experiment_type == "single"
-          lh_data.final_tol = 1e-3
+            B0 = zeros(p, p)
+            constr_data = ConstraintData(p)
+            admm_data = ADMMData(emp_data, constr_data, 1.0)
+            admm_data.tol = 5e-2
+            admm_data.quic_data.print_stats = false
+            admm_data.quic_data.tol = 1e-6
+            admm_data.B0 = B0
+            rho = 1.0
+            admm_data.rho = rho
+            admm_data.low_rank = experiment_type == "single"
+            lh_data = VanillaLHData(p, 1, B0)
+            lh_data.low_rank = experiment_type == "single"
+            lh_data.final_tol = 1e-3
 
-          global errors1, errors2, B1, B2
-          (B1, B2, err1, err2, lambda1, lambda2, errors1, errors2) = combined_oracle(pop_data, emp_data, admm_data, lh_data, lambdas)
-          (B, err, lambda, _) = llc(pop_data, emp_data, lambdas)
-          errors1_trials[trial] = err1
-          errors2_trials[trial] = err2
-          errors_llc_trials[trial] = err
-          lambdas1_trials[trial] = lambda1
-          lambdas2_trials[trial] = lambda2
-          lambdas_llc_trials[trial] = lambda
+            global errors1, errors2, B1, B2
+            (B1, B2, err1, err2, lambda1, lambda2, errors1, errors2) = combined_oracle(pop_data, emp_data, admm_data, lh_data, lambdas)
+            (B, err, lambda, _) = llc(pop_data, emp_data, lambdas)
+            errors1_trials[trial] = err1
+            errors2_trials[trial] = err2
+            errors_llc_trials[trial] = err
+            lambdas1_trials[trial] = lambda1
+            lambdas2_trials[trial] = lambda2
+            lambdas_llc_trials[trial] = lambda
 
-          println()
-          #= println("Difference between ADMM results: ", vecnorm(B_admm - B_admm2)) =#
-          println("ADMM, difference: ", err1)
-          println("LH, difference: ", err2)
+            println()
+            #= println("Difference between ADMM results: ", vecnorm(B_admm - B_admm2)) =#
+            println("ADMM, difference: ", err1)
+            println("LH, difference: ", err2)
+          end
+
+          push!(combined_results, Dict("n"=>n, "p"=>p, "d"=>d,
+                                       "errs1"=> errors1_trials,
+                                       "errs2"=>errors2_trials,
+                                       "errs_llc"=>errors_llc_trials,
+                                       "lambdas1"=>lambdas1_trials,
+                                       "lambdas2"=>lambdas2_trials,
+                                       "lambdas_llc"=>lambdas_llc_trials,
+                                       "gt"=>ground_truth_norms))
+
+          #= @save "results3_norm_vard.jld" combined_results =#
         end
-
-        push!(combined_results, Dict("p"=>p, "d"=>d,
-                                     "errs1"=> errors1_trials,
-                                     "errs2"=>errors2_trials,
-                                     "errs_llc"=>errors_llc_trials,
-                                     "lambdas1"=>lambdas1_trials,
-                                     "lambdas2"=>lambdas2_trials,
-                                     "lambdas_llc"=>lambdas_llc_trials,
-                                     "gt"=>ground_truth_norms))
-
-        @save "results3_norm_vard.jld" combined_results
       end
     end
   end
