@@ -12,8 +12,8 @@ module CausalMLTest
 
   # Optional
 	using Calculus
-  using Convex
-  using SCS
+  #= using Convex =#
+  #= using SCS =#
   using JLD
 
 	const experiment_type = "binary"
