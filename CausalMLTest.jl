@@ -4,6 +4,11 @@ module CausalMLTest
 	#= if isdefined(:CausalML) =#
 	#= 	reload("CausalML") =#
 	#= end =#
+
+  if ~("./" in LOAD_PATH)
+    push!(LOAD_PATH, "./")
+  end
+
 	import CausalML
 	reload("CausalML")
 	using CausalML
