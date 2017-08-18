@@ -7,6 +7,7 @@ module CausalMLTest
 
   if ~("./" in LOAD_PATH)
     push!(LOAD_PATH, "./")
+    push!(LOAD_PATH, "./CausalML")
   end
 
 	import CausalML
