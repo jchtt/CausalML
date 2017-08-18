@@ -19,7 +19,7 @@ module CausalMLTest
 	using Calculus
   #= using Convex =#
   #= using SCS =#
-  #= using JLD =#
+  using JLD
 
 	const experiment_type = "binary"
 	const p = 100
@@ -281,20 +281,28 @@ module CausalMLTest
   end
 
   function combined_oracle_screen()
-    #= ps = [100] =#
     ps = [100]
+    #= ps = [10] =#
     #= ns = logspace(log10(50), 4, 10) =#
-    ns = 100
+    ns = 1000
     #= ds = union(1:10, 12:2:20, 24:4:40) =#
     #= ds = 1:10 =#
     #= ds = [5,6] =#
     ds = 5
-    trials = 20
+    trials = 2
     global combined_results = []
     #= lambdas = flipdim(logspace(-4, -1, 40), 1) =#
-    lambdas = flipdim(logspace(-4, -1, 10), 1)
+    #= lambdas = flipdim(logspace(-4, -1, 50), 1) =#
+    lambdas = [1e-3]
     #= lambdas = logspace(-4, -1, 3) =#
     #= lambdas = [1e-2] =#
+
+    if length(ARGS) >= 1 
+      suffix = ARGS[1]
+    else
+      suffix = ""
+    end
+
     for n in ns
       for p in ps
         for d in ds
@@ -314,11 +322,13 @@ module CausalMLTest
             B0 = zeros(p, p)
             constr_data = ConstraintData(p)
             admm_data = ADMMData(emp_data, constr_data, 1.0)
-            admm_data.tol = 5e-2
+            admm_data.tol_abs = 5e-4
+            admm_data.tol_rel = 1e-3
             admm_data.quic_data.print_stats = false
             admm_data.quic_data.tol = 1e-6
+            admm_data.dual_balancing = true
             admm_data.B0 = B0
-            rho = 10.0
+            rho = 50.0
             admm_data.rho = rho
             admm_data.low_rank = experiment_type == "single"
             lh_data = VanillaLHData(p, 1, B0)
@@ -350,7 +360,13 @@ module CausalMLTest
                                        "lambdas_llc"=>lambdas_llc_trials,
                                        "gt"=>ground_truth_norms))
 
-          #= @save "results3_norm_vard.jld" combined_results =#
+          fname = "results4_norm_vard_" * suffix * ".jld"
+          #= jldopen(fname, "w") do file =#
+          open(fname, "w") do file
+            serialize(file, combined_results)
+            #= write(file, "combined_results", combined_results) =#
+          end
+          #= save(fname, "combined_results", combined_results) =#
         end
       end
     end

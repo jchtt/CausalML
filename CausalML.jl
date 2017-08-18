@@ -1722,7 +1722,8 @@ function admm(emp_data, admm_data, solvers, dual_update, vars0; compute_bmap = [
   # Shortcuts
   p = emp_data.p
   rho = admm_data.rho
-  tol = admm_data.tol
+  tol_abs = admm_data.tol_abs
+  tol_rel = admm_data.tol_rel
   dual_balancing = admm_data.dual_balancing
   mu = admm_data.mu
   tau = admm_data.tau
@@ -1742,6 +1743,10 @@ function admm(emp_data, admm_data, solvers, dual_update, vars0; compute_bmap = [
   compute_bmap(admm_data, vars, rho, bmap_old)
   bmap = copy(bmap_old)
   counter = 1
+
+  dim_primal = sum([length(var) for var in vars])
+  dim_dual = sum([length(dual) for dual in duals])
+  println("tol_primal_abs = ", sqrt(dim_primal) * tol_abs, ", tol_dual_abs = ", sqrt(dim_dual) * tol_abs)
 
   while ~converged
     # Minimization steps
@@ -1778,7 +1783,10 @@ function admm(emp_data, admm_data, solvers, dual_update, vars0; compute_bmap = [
     println("Primal residual: ", res_norm)
     println("Dual residual: ", dual_res_norm)
     #= if vecnorm(vars - vars_old) < tol =#
-    if res_norm < tol && dual_res_norm < tol
+    tol_primal = sqrt(dim_primal) * tol_abs + max(sqrt(sum([vecnorm(var) for var in vars])), vecnorm(bmap)) * tol_rel
+    tol_dual = sqrt(dim_dual) * tol_abs + sqrt(sum([vecnorm(dual) for dual in duals])) * tol_rel
+    #= println("tol_primal = ", tol_primal, ", tol_dual = ", tol_dual) =#
+    if res_norm < tol_primal && dual_res_norm < tol_dual
       converged = true
     else
       println("Iteration ", counter)
@@ -1940,7 +1948,8 @@ type ADMMData
   constr_data
   low_rank
   rho
-  tol
+  tol_abs
+  tol_rel
   dual_balancing
   mu
   tau
@@ -1957,7 +1966,8 @@ function ADMMData(emp_data, constr_data, lambda)
                   constr_data, # constr_data
                   false, # low_rank
                   1.0, # rho
-                  1e-2, # tol
+                  1e-2, # tol_abs
+                  1e-2, # tol_rel
                   true, # dual_balancing
                   5.0, # mu
                   1.5, # tau
