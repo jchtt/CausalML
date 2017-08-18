@@ -295,7 +295,7 @@ module CausalMLTest
     trials = 1
     global combined_results = []
     #= lambdas = flipdim(logspace(-4, -1, 40), 1) =#
-    lambdas = flipdim(logspace(-4, -1, 50), 1)
+    lambdas = flipdim(map(x -> ceil(Int32, x), logspace(-4, -1, 50), 1))
     #= lambdas = [1e-3] =#
     #= lambdas = logspace(-4, -1, 3) =#
     #= lambdas = [1e-2] =#
