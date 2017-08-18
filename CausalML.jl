@@ -21,14 +21,14 @@ first_pass = true
 #= include("Tools.jl") =#
 #= using .Tools =#
 
-include("RQuic.jl")
-using .RQuic
+#= include("RQuic.jl") =#
+#= using .RQuic =#
 
 #= include("Liblbfgs.jl/Liblbfgs.jl") =#
-if ~("./Liblbfgs.jl" in LOAD_PATH)
-	push!(LOAD_PATH, "./Liblbfgs.jl")
-end
-using Liblbfgs
+#= if ~("./Liblbfgs.jl" in LOAD_PATH) =#
+#= 	push!(LOAD_PATH, "./Liblbfgs.jl") =#
+#= end =#
+#= using Liblbfgs =#
 
 function symmetrize!(A)
   n = LinAlg.checksquare(A)
