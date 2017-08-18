@@ -284,7 +284,7 @@ module CausalMLTest
     #= ps = [100] =#
     ps = [100]
     #= ns = logspace(log10(50), 4, 10) =#
-    ns = 50
+    ns = 100
     #= ds = union(1:10, 12:2:20, 24:4:40) =#
     #= ds = 1:10 =#
     #= ds = [5,6] =#
@@ -318,7 +318,7 @@ module CausalMLTest
             admm_data.quic_data.print_stats = false
             admm_data.quic_data.tol = 1e-6
             admm_data.B0 = B0
-            rho = 1.0
+            rho = 10.0
             admm_data.rho = rho
             admm_data.low_rank = experiment_type == "single"
             lh_data = VanillaLHData(p, 1, B0)
