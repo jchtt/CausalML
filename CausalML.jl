@@ -2135,7 +2135,7 @@ function min_admm(emp_data, admm_data)
   chol = zeros(p, p)
   chol2 = zeros(p, p)
   for e = 1:E
-    if n > 2 * emp_data.n
+    if emp_data.n > 2 * p
       # Inverses
       copy!(chol, sigmas_emp[e])
       LAPACK.potrf!('U', chol)
