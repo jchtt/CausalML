@@ -363,12 +363,12 @@ module CausalMLTest
                                        "lambdas_llc"=>lambdas_llc_trials,
                                        "gt"=>ground_truth_norms))
 
-          #= fname = "CausalML/results/results4_norm_vard_" * suffix * ".bin" =#
-          #= #1= jldopen(fname, "w") do file =1# =#
-          #= open(fname, "w") do file =#
-          #=   serialize(file, combined_results) =#
-          #=   #1= write(file, "combined_results", combined_results) =1# =#
-          #= end =#
+          fname = "CausalML/results/results4_norm_vard_" * suffix * ".bin"
+          #= jldopen(fname, "w") do file =#
+          open(fname, "w") do file
+            serialize(file, combined_results)
+            #= write(file, "combined_results", combined_results) =#
+          end
 
           #= save(fname, "combined_results", combined_results) =#
         end
