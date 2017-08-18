@@ -22,7 +22,7 @@ module CausalMLTest
 	using Calculus
   #= using Convex =#
   #= using SCS =#
-  using JLD
+  #= using JLD =#
 
 	const experiment_type = "binary"
 	const p = 100
