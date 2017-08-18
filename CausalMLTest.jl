@@ -140,26 +140,26 @@ module CausalMLTest
 		#= println("Slack: ", s) =#
 	end
 
-	function l2_constr_test_sticky()
-    @load "sticky_data3.jld"
-    lh_data.lambda = 1e4
-    lh_data.gamma = 1.5
-    #= lh_data.x_base = zeros(p*(p-1)) =#
-		#= B0 = zeros(p, p) =#
-    #= lambda = 1e-3 =#
-		#= lh_data = VanillaLHData(p, lambda, B0) =#
-		#= lh_data.x_base = mat2vec(pop_data.B, emp_data) =#
-    #= lh_data.upper_bound = vecnorm(pop_data.B)^2 =#
-    #= lh_data.B0 = B0 =#
-		@time global B_lbfgsb = min_vanilla_lh(emp_data, lh_data, low_rank = true)
-		global B_constr
-		@time B_constr = min_constraint_lh(emp_data, lh_data)
-		println("LBFGSB, difference: ", vecnorm(B_lbfgsb - pop_data.B))
-		println("LBFGSB, constraint: ", vecnorm(B_constr - pop_data.B))
-		println("Difference: ", vecnorm(B_constr - B_lbfgsb))
-		#= println("Slack difference: ", s - vecnorm(B_constr-pop_data.B)^2) =#
-		#= println("Slack: ", s) =#
-	end
+	#= function l2_constr_test_sticky() =#
+    #= @load "sticky_data3.jld" =#
+    #= lh_data.lambda = 1e4 =#
+    #= lh_data.gamma = 1.5 =#
+    #= #1= lh_data.x_base = zeros(p*(p-1)) =1# =#
+	#= 	#1= B0 = zeros(p, p) =1# =#
+    #= #1= lambda = 1e-3 =1# =#
+	#= 	#1= lh_data = VanillaLHData(p, lambda, B0) =1# =#
+	#= 	#1= lh_data.x_base = mat2vec(pop_data.B, emp_data) =1# =#
+    #= #1= lh_data.upper_bound = vecnorm(pop_data.B)^2 =1# =#
+    #= #1= lh_data.B0 = B0 =1# =#
+	#= 	@time global B_lbfgsb = min_vanilla_lh(emp_data, lh_data, low_rank = true) =#
+	#= 	global B_constr =#
+	#= 	@time B_constr = min_constraint_lh(emp_data, lh_data) =#
+	#= 	println("LBFGSB, difference: ", vecnorm(B_lbfgsb - pop_data.B)) =#
+	#= 	println("LBFGSB, constraint: ", vecnorm(B_constr - pop_data.B)) =#
+	#= 	println("Difference: ", vecnorm(B_constr - B_lbfgsb)) =#
+	#= 	#1= println("Slack difference: ", s - vecnorm(B_constr-pop_data.B)^2) =1# =#
+	#= 	#1= println("Slack: ", s) =1# =#
+	#= end =#
 
 	function quic_test()
     data = QuadraticPenaltyData(p)
