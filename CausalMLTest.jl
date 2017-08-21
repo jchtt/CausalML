@@ -349,10 +349,10 @@ module CausalMLTest
             admm_data.quic_data.print_stats = false
             admm_data.quic_data.tol = 1e-6
             admm_data.dual_balancing = false
-            admm_data.bb = true
-            admm_data.tighten = false
+            admm_data.bb = false
+            admm_data.tighten = true
             admm_data.B0 = B0
-            rho = 50.0
+            rho = 1.0
             #= rho = 0.8670764957916309 =#
             admm_data.rho = rho
             admm_data.low_rank = experiment_type == "single"
