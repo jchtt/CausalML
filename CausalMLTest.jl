@@ -331,49 +331,49 @@ module CausalMLTest
           ground_truth_norms = zeros(trials)
           @time for trial in 1:trials
             println("Generating data")
-            combined = loadvar(fname)[1]
-            pop_data = combined[1]
-            emp_data = combined[2]
-            #= pop_data = PopulationData(p, d, matrix_std, experiment_type) =#
-            #= emp_data = EmpiricalData(pop_data, n) =#
+            #= combined = loadvar(fname)[1] =#
+            #= pop_data = combined[1] =#
+            #= emp_data = combined[2] =#
+            pop_data = PopulationData(p, d, matrix_std, experiment_type)
+            emp_data = EmpiricalData(pop_data, n)
             #= push!(debug_data, [pop_data, emp_data]) =#
             #= savevar(fname, debug_data) =#
             ground_truth_norms[trial] = vecnorm(pop_data.B)
 
             #= for lambdas in lambdas_col =#
-              B0 = zeros(p, p)
-              constr_data = ConstraintData(p)
-              admm_data = ADMMData(emp_data, constr_data, 1.0)
-              admm_data.tol_abs = 5e-4
-              admm_data.tol_rel = 1e-3
-              admm_data.quic_data.print_stats = false
-              admm_data.quic_data.tol = 1e-6
-              admm_data.dual_balancing = false
-              admm_data.bb = true
-              admm_data.tighten = false
-              admm_data.B0 = B0
-              rho = 50.0
-              rho = 0.8670764957916309
-              admm_data.rho = rho
-              admm_data.low_rank = experiment_type == "single"
-              lh_data = VanillaLHData(p, 1, B0)
-              lh_data.low_rank = experiment_type == "single"
-              lh_data.final_tol = 1e-3
+            B0 = zeros(p, p)
+            constr_data = ConstraintData(p)
+            admm_data = ADMMData(emp_data, constr_data, 1.0)
+            admm_data.tol_abs = 5e-4
+            admm_data.tol_rel = 1e-3
+            admm_data.quic_data.print_stats = false
+            admm_data.quic_data.tol = 1e-6
+            admm_data.dual_balancing = false
+            admm_data.bb = true
+            admm_data.tighten = false
+            admm_data.B0 = B0
+            rho = 50.0
+            #= rho = 0.8670764957916309 =#
+            admm_data.rho = rho
+            admm_data.low_rank = experiment_type == "single"
+            lh_data = VanillaLHData(p, 1, B0)
+            lh_data.low_rank = experiment_type == "single"
+            lh_data.final_tol = 1e-3
 
-              global errors1, errors2, B1, B2
-              (B1, B2, err1, err2, lambda1, lambda2, errors1, errors2) = combined_oracle(pop_data, emp_data, admm_data, lh_data, lambdas)
-              (B, err, lambda, _) = llc(pop_data, emp_data, lambdas)
-              errors1_trials[trial] = err1
-              errors2_trials[trial] = err2
-              errors_llc_trials[trial] = err
-              lambdas1_trials[trial] = lambda1
-              lambdas2_trials[trial] = lambda2
-              lambdas_llc_trials[trial] = lambda
+            global errors1, errors2, B1, B2
+            (B1, B2, err1, err2, lambda1, lambda2, errors1, errors2) = combined_oracle(pop_data, emp_data, admm_data, lh_data, lambdas)
+            (B, err, lambda, _) = llc(pop_data, emp_data, lambdas)
+            errors1_trials[trial] = err1
+            errors2_trials[trial] = err2
+            errors_llc_trials[trial] = err
+            lambdas1_trials[trial] = lambda1
+            lambdas2_trials[trial] = lambda2
+            lambdas_llc_trials[trial] = lambda
 
-              println()
-              #= println("Difference between ADMM results: ", vecnorm(B_admm - B_admm2)) =#
-              println("ADMM, difference: ", err1)
-              println("LH, difference: ", err2)
+            println()
+            #= println("Difference between ADMM results: ", vecnorm(B_admm - B_admm2)) =#
+            println("ADMM, difference: ", err1)
+            println("LH, difference: ", err2)
             #= end =#
 
             push!(combined_results, Dict("n"=>n, "p"=>p, "d"=>d,
@@ -387,13 +387,13 @@ module CausalMLTest
 
             fname = "CausalML/results/results4_norm_vard_" * suffix * ".bin"
             #= jldopen(fname, "w") do file =#
-              open(fname, "w") do file
-                serialize(file, combined_results)
+            open(fname, "w") do file
+              serialize(file, combined_results)
                 #= write(file, "combined_results", combined_results) =#
-              end
             end
+          end
 
-              #= save(fname, "combined_results", combined_results) =#
+          #= save(fname, "combined_results", combined_results) =#
         end
       end
     end
