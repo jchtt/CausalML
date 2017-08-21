@@ -1,6 +1,6 @@
 # vim: ts=2 sw=2 et
 module CausalML
-export gen_b, PopulationData, EmpiricalData, lh, l1_wrap, mat2vec, vec2mat, min_vanilla_lh, VanillaLHData, min_constraint_lh, quic_old, quic, QuadraticPenaltyData, min_admm, ConstraintData, ADMMData, QuadraticPenaltyData_old, min_admm_old, ConstraintData_old, ADMMData_old, min_admm_oracle, llc, symmetrize!, min_constr_lh_oracle, combined_oracle
+export gen_b, PopulationData, EmpiricalData, lh, l1_wrap, mat2vec, vec2mat, min_vanilla_lh, VanillaLHData, min_constraint_lh, quic_old, quic, QuadraticPenaltyData, min_admm, ConstraintData, ADMMData, QuadraticPenaltyData_old, min_admm_old, ConstraintData_old, ADMMData_old, min_admm_oracle, llc, symmetrize!, min_constr_lh_oracle, combined_oracle, savevar
 
 #using Plots
 using Lbfgsb
@@ -17,6 +17,8 @@ using Calculus
 using Lasso
 
 first_pass = true
+admm_path = []
+debugfname = "debug.bin"
 
 #= include("Tools.jl") =#
 #= using .Tools =#
@@ -29,6 +31,12 @@ first_pass = true
 #= 	push!(LOAD_PATH, "./Liblbfgs.jl") =#
 #= end =#
 #= using Liblbfgs =#
+
+function savevar(fname, var)
+  open(fname, "w") do file
+    serialize(file, var)
+  end
+end
 
 function symmetrize!(A)
   n = LinAlg.checksquare(A)
@@ -1725,9 +1733,13 @@ function admm(emp_data, admm_data, solvers, dual_update, vars0; compute_bmap = [
   tol_abs = admm_data.tol_abs
   tol_rel = admm_data.tol_rel
   dual_balancing = admm_data.dual_balancing
+  bb = admm_data.bb
+  tighten = admm_data.tighten
   mu = admm_data.mu
   tau = admm_data.tau
   duals = admm_data.duals
+  T = admm_data.T
+  eps_cor = admm_data.eps_cor
 
   converged = false
   vars = deepcopy(vars0)
@@ -1738,6 +1750,27 @@ function admm(emp_data, admm_data, solvers, dual_update, vars0; compute_bmap = [
   #=   push!(duals, zeros(p, p)) =#
   #= end =#
   primal_residuals = deepcopy(duals)
+
+  if bb
+    duals_old = deepcopy(duals)
+    duals_hat = deepcopy(duals)
+    duals_hat_old = deepcopy(duals_hat)
+    Ainv2s_old = deepcopy(admm_data.Ainv2s)
+    thetas_old = []
+    for e = 1:length(duals)
+      push!(thetas_old, copy(vars[e]))
+    end
+    delta_thetas = deepcopy(thetas_old)
+    delta_Ainv2s = deepcopy(admm_data.Ainv2s)
+    delta_duals = deepcopy(duals)
+    delta_duals_hat = deepcopy(duals)
+    first_run = true
+  end
+
+  if bb
+    primal_residuals_hat = deepcopy(duals)
+  end
+
   dual_update(admm_data, vars, primal_residuals, compute_B_only = true)
   bmap_old = fill(0.0, emp_data.E*p^2)
   compute_bmap(admm_data, vars, rho, bmap_old)
@@ -1748,7 +1781,9 @@ function admm(emp_data, admm_data, solvers, dual_update, vars0; compute_bmap = [
   dim_dual = sum([length(dual) for dual in duals])
   println("tol_primal_abs = ", sqrt(dim_primal) * tol_abs, ", tol_dual_abs = ", sqrt(dim_dual) * tol_abs)
 
+  push!(admm_path, [])
   while ~converged
+    status = Dict()
     # Minimization steps
     for s! in solvers
       s!(vars, duals, rho)
@@ -1756,6 +1791,13 @@ function admm(emp_data, admm_data, solvers, dual_update, vars0; compute_bmap = [
 
     # Dual updates
     res_norm = 0.0
+
+    if bb && mod(counter, T) == 1
+      for e = 1:length(duals)
+        duals_hat[e] = duals[e] + rho * (vars[e] - admm_data.Ainv2s[e])
+      end
+    end
+
     dual_update(admm_data, vars, primal_residuals)
     for e = 1:length(duals)
       pres = primal_residuals[e]
@@ -1765,6 +1807,68 @@ function admm(emp_data, admm_data, solvers, dual_update, vars0; compute_bmap = [
       #= dual[:] = (dual + dual')/2 =#
       symmetrize!(dual)
     end
+
+    if bb && mod(counter, T) == 1 && !first_run
+      delta_duals_hat_sq = 0.0
+      delta_thetas_mul_delta_duals_hat = 0.0
+      delta_thetas_sq = 0.0
+
+      delta_duals_sq = 0.0
+      delta_Ainv2s_mul_delta_duals = 0.0
+      delta_Ainv2s_sq = 0.0
+
+      for e = 1:length(duals)
+        delta_thetas[e] = vars[e] - thetas_old[e]
+        delta_Ainv2s[e] = admm_data.Ainv2s[e] - Ainv2s_old[e]
+        delta_duals[e] = -(duals[e] - duals_old[e])
+        delta_duals_hat[e] = -(duals_hat[e] - duals_hat_old[e])
+
+        delta_duals_hat_sq += sum(delta_duals_hat[e].^2)
+        delta_thetas_mul_delta_duals_hat += sum(delta_thetas[e] .* delta_duals_hat[e])
+        delta_thetas_sq += sum(delta_thetas[e].^2)
+
+        delta_duals_sq += sum(delta_duals[e].^2)
+        delta_Ainv2s_mul_delta_duals += sum(delta_duals[e] .* delta_Ainv2s[e])
+        delta_Ainv2s_sq += sum(delta_Ainv2s[e].^2)
+      end
+
+      alpha_sd = delta_duals_hat_sq / delta_thetas_mul_delta_duals_hat
+      alpha_mg = delta_thetas_mul_delta_duals_hat / delta_thetas_sq
+
+      beta_sd = delta_duals_sq / delta_Ainv2s_mul_delta_duals
+      beta_mg = delta_Ainv2s_mul_delta_duals / delta_Ainv2s_sq
+
+      #= alpha = 2 * alpha_mg > alpha_sd ? alpha_mg : alpha_sd - alpha_mg / 2 =#
+      #= beta = 2 * beta_mg > beta_sd ? beta_mg : beta_sd - beta_mg / 2 =#
+      alpha = alpha_sd
+      beta = beta_sd
+
+      alpha_cor = delta_thetas_mul_delta_duals_hat / (sqrt(delta_thetas_sq) * sqrt(delta_duals_hat_sq))
+      beta_cor = delta_Ainv2s_mul_delta_duals / (sqrt(delta_Ainv2s_sq) * sqrt(delta_duals_sq))
+
+      println("alpha_sd = ", alpha_sd, ", alpha_mg = ", alpha_mg, ", beta_sd = ", beta_sd, ", beta_mg = ", beta_mg)
+      println("alpha = ", alpha, ", beta = ", beta, ", alpha_cor = ", alpha_cor, ", beta_cor = ", beta_cor)
+
+      if alpha_cor > eps_cor && beta_cor > eps_cor
+        rho = sqrt(alpha * beta)
+      elseif alpha_cor > eps_cor && beta_cor <= eps_cor
+        rho = alpha
+      elseif alpha_cor <= eps_cor && beta_cor > eps_cor
+        rho = beta
+      end
+    end
+
+    if bb && mod(counter, T) == 1
+      for e = 1:length(duals)
+        duals_hat_old[e] = copy(duals_hat[e])
+        thetas_old[e] = copy(vars[e])
+        duals_old[e] = copy(duals[e])
+        Ainv2s_old[e] = copy(admm_data.Ainv2s[e])
+      end
+      B_old = copy(vars[end])
+      first_run = false
+    end
+
     #= for (dual, dual_update, pres) in zip(duals, dual_updates, primal_residuals) =#
     #=   pres[:] = dual_update(vars) =#
     #=   res_norm += vecnorm(pres)^2 =#
@@ -1802,8 +1906,29 @@ function admm(emp_data, admm_data, solvers, dual_update, vars0; compute_bmap = [
       end
     end
 
-    vars_old = deepcopy(vars)
+    # Tightening
+    if tighten && counter >= 3
+      if res_norm > 1.5 * res_norm_old
+        rho *= 2
+      end
+    end
+
+    res_norm_old = copy(res_norm)
+
+    global admm_path
+    status["vars"] = deepcopy(vars)
+    status["duals"] = deepcopy(duals)
+    status["bmap"] = deepcopy(bmap)
+    status["rho"] = copy(rho)
+    push!(admm_path[end], status)
+
+    #= if (counter <= 40 || admm_data.quic_data.lambda > 0.005) && mod(counter, 20) == 0 =#
+    #=   println("Serializing") =#
+    #=   savevar(debugfname, admm_path) =#
+    #= end =#
+
     println("rho = ", rho)
+    vars_old = deepcopy(vars)
   end
 
   return vars
@@ -1895,6 +2020,7 @@ function constr_least_sq(x, g, vars, duals, rho, emp_data, data::ConstraintData,
 
       #= Ainv = eye(p) - Us[e]*data.B =#
       #= println("Difference in Ainv: ", vecnorm(Ainv - data.Ainv)) =#
+      
       #= println(Ainv) =#
       #= println(data.Ainv) =#
       #= data.Ainv = Ainv =#
@@ -1951,6 +2077,8 @@ type ADMMData
   tol_abs
   tol_rel
   dual_balancing
+  bb # Barzilai-Borwein stepsize
+  tighten # Tighten penalty parameter
   mu
   tau
   B::Array{Float64,2}
@@ -1959,6 +2087,8 @@ type ADMMData
   Ainv2s::Array{Array{Float64,2},1}
   B0::Array{Float64,2}
   duals::Array{Array{Float64,2},1}
+  T::Int64 # How often to run BB update
+  eps_cor::Float64 # Safeguarding threshold for BB update
 end
 
 function ADMMData(emp_data, constr_data, lambda)
@@ -1969,6 +2099,8 @@ function ADMMData(emp_data, constr_data, lambda)
                   1e-2, # tol_abs
                   1e-2, # tol_rel
                   true, # dual_balancing
+                  false, # bb
+                  false, # tighten
                   5.0, # mu
                   1.5, # tau
                   zeros(emp_data.p, emp_data.p), # B
@@ -1977,8 +2109,9 @@ function ADMMData(emp_data, constr_data, lambda)
                   [zeros(emp_data.p, emp_data.p) for e = 1:emp_data.E], # Ainv2s
                   zeros(p, p), # B0 
                   [zeros(emp_data.p, emp_data.p) for e = 1:emp_data.E], # duals
+                  3, # T
+                  0.2, # eps_cor
                  )
-
   data.quic_data.lambda = lambda
   return data
 end
