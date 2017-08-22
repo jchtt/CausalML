@@ -1908,7 +1908,7 @@ function admm(emp_data, admm_data, solvers, dual_update, vars0; compute_bmap = [
 
     # Tightening
     if tighten && counter >= 3
-      if res_norm > 1.1 * res_norm_old
+      if res_norm > res_norm_old
         rho *= 2
       end
     end
