@@ -1783,7 +1783,7 @@ function admm(emp_data, admm_data, solvers, dual_update, vars0; compute_bmap = [
 
   push!(admm_path, [])
   while ~converged
-    status = Dict()
+    #= status = Dict() =#
     # Minimization steps
     for s! in solvers
       s!(vars, duals, rho)
@@ -1915,12 +1915,12 @@ function admm(emp_data, admm_data, solvers, dual_update, vars0; compute_bmap = [
 
     res_norm_old = copy(res_norm)
 
-    global admm_path
-    status["vars"] = deepcopy(vars)
-    status["duals"] = deepcopy(duals)
-    status["bmap"] = deepcopy(bmap)
-    status["rho"] = copy(rho)
-    push!(admm_path[end], status)
+    #= global admm_path =#
+    #= status["vars"] = deepcopy(vars) =#
+    #= status["duals"] = deepcopy(duals) =#
+    #= status["bmap"] = deepcopy(bmap) =#
+    #= status["rho"] = copy(rho) =#
+    #= push!(admm_path[end], status) =#
 
     #= if (counter <= 40 || admm_data.quic_data.lambda > 0.005) && mod(counter, 20) == 0 =#
     #=   println("Serializing") =#
