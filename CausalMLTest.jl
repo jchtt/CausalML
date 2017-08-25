@@ -292,13 +292,13 @@ module CausalMLTest
   function combined_oracle_screen()
     ps = [100]
     #= ps = [10] =#
-    ns = map(x -> ceil(Int32, x), logspace(log10(50), 4, 10))
+    #= ns = map(x -> ceil(Int32, x), logspace(log10(50), 4, 10)) =#
     #= ns = [50] =#
-    #= ns = 1000 =#
+    ns = 10000
     #= ds = union(1:10, 12:2:20, 24:4:40) =#
-    #= ds = 1:10 =#
+    ds = 1:10
     #= ds = [5,6] =#
-    ds = 5
+    #= ds = 5 =#
     trials = 1
     global combined_results = []
     #= lambdas = flipdim(logspace(-4, -1, 40), 1) =#
@@ -348,9 +348,11 @@ module CausalMLTest
             admm_data.tol_rel = 1e-3
             admm_data.quic_data.print_stats = false
             admm_data.quic_data.tol = 1e-6
-            admm_data.dual_balancing = false
+            admm_data.dual_balancing = true
             admm_data.bb = false
             admm_data.tighten = true
+            admm_data.mu = 500
+            admm_data.tau = 1.5
             admm_data.B0 = B0
             rho = 1.0
             #= rho = 0.8670764957916309 =#

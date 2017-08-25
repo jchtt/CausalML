@@ -1898,18 +1898,21 @@ function admm(emp_data, admm_data, solvers, dual_update, vars0; compute_bmap = [
     end
 
     # Residual balancing
+    balanced = false
     if dual_balancing
       if res_norm > mu * dual_res_norm
         rho *= tau
+        balanced = true
       elseif dual_res_norm > mu * res_norm
         rho /= tau
+        balanced = true
       end
     end
 
     # Tightening
     if tighten && counter >= 3
-      if res_norm > res_norm_old
-        rho *= 2
+      if res_norm > res_norm_old && !balanced
+        rho *= 1.5
       end
     end
 
