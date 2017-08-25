@@ -290,15 +290,16 @@ module CausalMLTest
   end
 
   function combined_oracle_screen()
-    ps = [100]
+    #= ps = [100] =#
+    ps = 10:10:100
     #= ps = [10] =#
     #= ns = map(x -> ceil(Int32, x), logspace(log10(50), 4, 10)) =#
     #= ns = [50] =#
     ns = 10000
     #= ds = union(1:10, 12:2:20, 24:4:40) =#
-    ds = 1:10
+    #= ds = 1:10 =#
     #= ds = [5,6] =#
-    #= ds = 5 =#
+    ds = 5
     trials = 1
     global combined_results = []
     #= lambdas = flipdim(logspace(-4, -1, 40), 1) =#

@@ -1883,12 +1883,12 @@ function admm(emp_data, admm_data, solvers, dual_update, vars0; compute_bmap = [
     bmap_old = copy(bmap)
 
     # Check for convergence
-    println("Norm difference: ", vecnorm(vars - vars_old))
+    println("Norm difference: ", sqrt(sum([vecnorm(mat)^2 for mat in vars - vars_old])))
     println("Primal residual: ", res_norm)
     println("Dual residual: ", dual_res_norm)
     #= if vecnorm(vars - vars_old) < tol =#
-    tol_primal = sqrt(dim_primal) * tol_abs + max(sqrt(sum([vecnorm(var) for var in vars])), vecnorm(bmap)) * tol_rel
-    tol_dual = sqrt(dim_dual) * tol_abs + sqrt(sum([vecnorm(dual) for dual in duals])) * tol_rel
+    tol_primal = sqrt(dim_primal) * tol_abs + max(sqrt(sum([vecnorm(var)^2 for var in vars])), vecnorm(bmap)) * tol_rel
+    tol_dual = sqrt(dim_dual) * tol_abs + sqrt(sum([vecnorm(dual)^2 for dual in duals])) * tol_rel
     #= println("tol_primal = ", tol_primal, ", tol_dual = ", tol_dual) =#
     if res_norm < tol_primal && dual_res_norm < tol_dual
       converged = true
