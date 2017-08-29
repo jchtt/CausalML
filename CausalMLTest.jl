@@ -294,7 +294,8 @@ module CausalMLTest
     #= ps = 10:10:100 =#
     #= ps = [10] =#
     #= ns = map(x -> ceil(Int32, x), logspace(log10(50), 4, 10)) =#
-    ns = map(x -> ceil(Int32, x), logspace(4, log10(25000), 5))
+    #= ns = map(x -> ceil(Int32, x), logspace(4, log10(25000), 5)) =#
+    ns = map(x -> ceil(Int32, x), logspace(log10(50), log10(25000), 15))
     #= ns = [50] =#
     #= ns = 10000 =#
     #= ds = union(1:10, 12:2:20, 24:4:40) =#
@@ -363,6 +364,7 @@ module CausalMLTest
             lh_data = VanillaLHData(p, 1, B0)
             lh_data.low_rank = experiment_type == "single"
             lh_data.final_tol = 1e-3
+            lh_data.use_constraint = false
 
             global errors1, errors2, B1, B2
             (B1, B2, err1, err2, lambda1, lambda2, errors1, errors2) = combined_oracle(pop_data, emp_data, admm_data, lh_data, lambdas)

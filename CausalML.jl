@@ -365,6 +365,7 @@ type VanillaLHData
   low_rank::Bool # Use low rank decomposition
   s::Float64 # Starting value for constraint slack parameter
   dual::Float64 # Dual variable
+  use_constraint::Bool # Should we constraint to a ball?
 end
 
 function VanillaLHData(p, lambda, B0)
@@ -403,6 +404,7 @@ function VanillaLHData(p, lambda, B0)
                        false, # low_rank
                        0.0, # s0
                        0.0, # dual
+                       true, # use_constraint
                       )
 end
 
@@ -614,9 +616,10 @@ function l1_wrap(x, g, lambda, f, data)
 end
 
 
-function min_vanilla_lh(emp_data, lh_data; low_rank = false)
+function min_vanilla_lh(emp_data, lh_data)
   dim = 2*emp_data.p*(emp_data.p-1)
   p = emp_data.p
+  low_rank = lh_data.low_rank
 
   inner_fun(x, g) = lh(emp_data, lh_data, x, g, low_rank = low_rank)
   outer_fun(x, g) = l1_wrap(x, g, lh_data.lambda, inner_fun, lh_data)
@@ -2336,7 +2339,11 @@ function min_constr_lh_oracle(pop_data, emp_data, lh_data, lambdas)
   for i = 1:length(lambdas)
     lh_data.lambda = lambdas[i]
     lh_data.B0 = copy(B_lh)
-    B_lh = copy(min_constraint_lh(emp_data, lh_data))
+    if lh_data.use_constraint
+      B_lh = copy(min_constraint_lh(emp_data, lh_data))
+    else
+      B_lh = copy(min_vanilla_lh(emp_data, lh_data))
+    end
     push!(Bs, B_lh)
     errors[i] = vecnorm(B_lh - pop_data.B)
   end
