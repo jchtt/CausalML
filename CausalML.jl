@@ -366,6 +366,7 @@ type VanillaLHData
   s::Float64 # Starting value for constraint slack parameter
   dual::Float64 # Dual variable
   use_constraint::Bool # Should we constraint to a ball?
+  continuation::Bool # Should we use continuation in oracle
 end
 
 function VanillaLHData(p, lambda, B0)
@@ -405,6 +406,7 @@ function VanillaLHData(p, lambda, B0)
                        0.0, # s0
                        0.0, # dual
                        true, # use_constraint
+                       true, # continuation
                       )
 end
 
@@ -2338,7 +2340,9 @@ function min_constr_lh_oracle(pop_data, emp_data, lh_data, lambdas)
   B_lh = copy(lh_data.B0)
   for i = 1:length(lambdas)
     lh_data.lambda = lambdas[i]
-    lh_data.B0 = copy(B_lh)
+    if lh_data.continuation
+      lh_data.B0 = copy(B_lh)
+    end
     if lh_data.use_constraint
       B_lh = copy(min_constraint_lh(emp_data, lh_data))
     else

@@ -325,12 +325,12 @@ module CausalMLTest
     for n in ns
       for p in ps
         for d in ds
-          errors1_trials = zeros(trials)
-          lambdas1_trials = zeros(trials)
+          #= errors1_trials = zeros(trials) =#
+          #= lambdas1_trials = zeros(trials) =#
           errors2_trials = zeros(trials)
           lambdas2_trials = zeros(trials)
-          errors_llc_trials = zeros(trials)
-          lambdas_llc_trials = zeros(trials)
+          #= errors_llc_trials = zeros(trials) =#
+          #= lambdas_llc_trials = zeros(trials) =#
           ground_truth_norms = zeros(trials)
           @time for trial in 1:trials
             println("Generating data")
@@ -365,33 +365,35 @@ module CausalMLTest
             lh_data.low_rank = experiment_type == "single"
             lh_data.final_tol = 1e-3
             lh_data.use_constraint = false
+            lh_data.continuation = false
 
             global errors1, errors2, B1, B2
-            (B1, B2, err1, err2, lambda1, lambda2, errors1, errors2) = combined_oracle(pop_data, emp_data, admm_data, lh_data, lambdas)
-            (B, err, lambda, _) = llc(pop_data, emp_data, lambdas)
-            errors1_trials[trial] = err1
+            #= (B1, B2, err1, err2, lambda1, lambda2, errors1, errors2) = combined_oracle(pop_data, emp_data, admm_data, lh_data, lambdas) =#
+            (B2, err2, lambda2, errors2) = min_constr_lh_oracle(pop_data, emp_data, lh_data, lambdas) 
+            #= (B, err, lambda, _) = llc(pop_data, emp_data, lambdas) =#
+            #= errors1_trials[trial] = err1 =#
             errors2_trials[trial] = err2
-            errors_llc_trials[trial] = err
-            lambdas1_trials[trial] = lambda1
+            #= errors_llc_trials[trial] = err =#
+            #= lambdas1_trials[trial] = lambda1 =#
             lambdas2_trials[trial] = lambda2
-            lambdas_llc_trials[trial] = lambda
+            #= lambdas_llc_trials[trial] = lambda =#
 
             println()
             #= println("Difference between ADMM results: ", vecnorm(B_admm - B_admm2)) =#
-            println("ADMM, difference: ", err1)
+            #= println("ADMM, difference: ", err1) =#
             println("LH, difference: ", err2)
             #= end =#
 
             push!(combined_results, Dict("n"=>n, "p"=>p, "d"=>d,
-                                         "errs1"=> errors1_trials,
+                                         #= "errs1"=> errors1_trials, =#
                                          "errs2"=>errors2_trials,
-                                         "errs_llc"=>errors_llc_trials,
-                                         "lambdas1"=>lambdas1_trials,
+                                         #= "errs_llc"=>errors_llc_trials, =#
+                                         #= "lambdas1"=>lambdas1_trials, =#
                                          "lambdas2"=>lambdas2_trials,
-                                         "lambdas_llc"=>lambdas_llc_trials,
+                                         #= "lambdas_llc"=>lambdas_llc_trials, =#
                                          "gt"=>ground_truth_norms))
 
-            fname = "CausalML/results/results4_norm_varn_" * suffix * ".bin"
+            fname = "CausalML/results/results4_norm_varn_noconstr_nocont" * suffix * ".bin"
             #= jldopen(fname, "w") do file =#
             open(fname, "w") do file
               serialize(file, combined_results)
