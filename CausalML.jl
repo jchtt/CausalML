@@ -76,7 +76,7 @@ type PopulationData
   I
   E
 
-  function PopulationData(p, d, std, experiment_type)
+  function PopulationData(p, d, std, experiment_type; k = 1)
     ret = new()
     ret.p = p
     ret.d = d
@@ -122,6 +122,63 @@ type PopulationData
 
         U = ones(p)
         U[mask] = 0
+        U = diagm(U)
+
+        push!(ret.Us, U)
+      end
+    elseif experiment_type == "bounded"
+      # Check condition
+      if p <= k^2/2
+        error("Cannot contsruct bounded experiments because k is too large")
+      end
+
+      # Build graph
+      num_cliques = floor(Int64, 2*p/(k*(k+1)))
+      rest = p - num_cliques * (k*(k+1))/2
+      l = ceil(Int64, sqrt(0.25+2*rest)-0.5) + 1
+      m = num_cliques * (k+1) + l
+      #= m = ceil(Int64, 2*p/k)+1 =#
+      L = zeros(Int64, m, m) # adjacency matrix
+
+      edges_missing = p
+      for i = 1:m
+        #= println("Edges missing: ", edges_missing) =#
+        #= println(L) =#
+        if edges_missing == 0
+          break
+        end
+        prev_connections = sum(L[1:i-1, i])
+        new_connections = k - prev_connections
+        actual_new_connections = min(new_connections, edges_missing, m-i)
+        #= inds = (i+1:p)[randperm(p-i)][1:actual_new_connections] =#
+        #= inds = i+1+1:i+actual_new_connections =#
+        for j = i+1:i+actual_new_connections
+        #= for j in inds =#
+          L[j, i] = 1
+          L[i, j] = 1
+        end
+        edges_missing -= actual_new_connections
+      end
+      println("Edges missing: ", edges_missing)
+      #= println(L) =#
+
+      # Extract experiments
+      for i = 1:m
+        push!(ret.Js_ind, [])
+      end
+      #= println(ret.Js_ind) =#
+      for (node, (i, j)) in enumerate(zip(findn(triu(L))...))
+        push!(ret.Js_ind[i], node)
+        push!(ret.Js_ind[j], node)
+      end
+
+      for i = 1:m
+        mask = trues(p)
+        mask[ret.Js_ind[i]] = false
+        push!(ret.Us_ind, find(mask))
+
+        U = zeros(p)
+        U[mask] = 1
         U = diagm(U)
 
         push!(ret.Us, U)
@@ -619,6 +676,8 @@ end
 
 
 function min_vanilla_lh(emp_data, lh_data)
+  println()
+  println("Solving vanilla lh")
   dim = 2*emp_data.p*(emp_data.p-1)
   p = emp_data.p
   low_rank = lh_data.low_rank

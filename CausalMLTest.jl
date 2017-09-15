@@ -26,11 +26,12 @@ module CausalMLTest
 
   # Optional
 	using Calculus
+  using LightGraphs
   #= using Convex =#
   #= using SCS =#
   #= using JLD =#
 
-	const experiment_type = "binary"
+	experiment_type = "single"
 	const p = 100
 	const d = 10
 	matrix_std = 0.8
@@ -43,9 +44,9 @@ module CausalMLTest
 	#= run_ops = ["fast_lh_test"] =# 
 
 	# Generate data
-	println("Generating data")
-	pop_data = PopulationData(p, d, matrix_std, experiment_type)
-	emp_data = EmpiricalData(pop_data, n)
+	#= println("Generating data") =#
+	#= pop_data = PopulationData(p, d, matrix_std, experiment_type) =#
+	#= emp_data = EmpiricalData(pop_data, n) =#
 
 	#= if "lbfgsb_test" in run_ops =#
 	function lbfgsb_test()
@@ -221,7 +222,7 @@ module CausalMLTest
     admm_data.quic_data.print_stats = false
     admm_data.quic_data.inner_tol = 1e-8
     admm_data.tol = 1e-1
-    admm_data.low_rank = experiment_type == "single"
+    admm_data.low_rank = experiment_type != "binary"
     @time global B_admm = min_admm(emp_data, admm_data, B0)
     println()
     #= println("Difference between ADMM results: ", vecnorm(B_admm - B_admm2)) =#
@@ -239,7 +240,7 @@ module CausalMLTest
     lambdas = logspace(-4, 4, 20)
     rho = 1.0
     admm_data.rho = rho
-    admm_data.low_rank = experiment_type == "single"
+    admm_data.low_rank = experiment_type != "binary"
     global errors
     (err, lambda, errors) = min_admm_oracle(pop_data, emp_data, admm_data, lambdas)
     println()
@@ -254,7 +255,7 @@ module CausalMLTest
 		#= lh_data.x_base = mat2vec(pop_data.B, emp_data) =#
     lh_data.x_base = mat2vec(zeros(p, p), emp_data)
     lh_data.upper_bound = vecnorm(pop_data.B)^2 # upper bound is squared
-    lh_data.low_rank = experiment_type == "single"
+    lh_data.low_rank = experiment_type != "binary"
 
     lambdas = flipdim(logspace(-4, 1, 10), 1)
     global errors
@@ -274,9 +275,9 @@ module CausalMLTest
     admm_data.B0 = B0
     rho = 1.0
     admm_data.rho = rho
-    admm_data.low_rank = experiment_type == "single"
+    admm_data.low_rank = experiment_type != "binary"
 		lh_data = VanillaLHData(p, lambda, B0)
-    lh_data.low_rank = experiment_type == "single"
+    lh_data.low_rank = experiment_type != "binary"
 
     lambdas = logspace(-1, 1, 5)
 
@@ -290,14 +291,18 @@ module CausalMLTest
   end
 
   function combined_oracle_screen()
+    experiment_type = "bounded"
+    #= k = 5 =#
+    ks = 2:1:12
+    #= ks = [5] =#
     ps = [100]
     #= ps = 10:10:100 =#
     #= ps = [10] =#
     #= ns = map(x -> ceil(Int32, x), logspace(log10(50), 4, 10)) =#
     #= ns = map(x -> ceil(Int32, x), logspace(4, log10(25000), 5)) =#
-    ns = map(x -> ceil(Int32, x), logspace(log10(50), log10(25000), 15))
+    #= ns = map(x -> ceil(Int32, x), logspace(log10(50), log10(25000), 15)) =#
     #= ns = [50] =#
-    #= ns = 10000 =#
+    ns = 10000
     #= ds = union(1:10, 12:2:20, 24:4:40) =#
     #= ds = 1:10 =#
     #= ds = [5,6] =#
@@ -305,9 +310,9 @@ module CausalMLTest
     trials = 1
     global combined_results = []
     #= lambdas = flipdim(logspace(-4, -1, 40), 1) =#
+    #= lambdas = flipdim(logspace(-4, -1, 3), 1) =#
     lambdas = flipdim(logspace(-4, -1, 50), 1)
     #= lambdas = [1e-3] =#
-    #= lambdas = logspace(-4, -1, 3) =#
     #= lambdas = [1e-2] =#
     #= lambdas_col = [[0.004498432668969444], [0.005179474679231213, 0.004498432668969444], ] =#
     #= lambdas_col = [[0.004498432668969444]] =#
@@ -325,83 +330,111 @@ module CausalMLTest
     for n in ns
       for p in ps
         for d in ds
-          #= errors1_trials = zeros(trials) =#
-          #= lambdas1_trials = zeros(trials) =#
-          errors2_trials = zeros(trials)
-          lambdas2_trials = zeros(trials)
-          #= errors_llc_trials = zeros(trials) =#
-          #= lambdas_llc_trials = zeros(trials) =#
-          ground_truth_norms = zeros(trials)
-          @time for trial in 1:trials
-            println("Generating data")
-            #= combined = loadvar(fname)[1] =#
-            #= pop_data = combined[1] =#
-            #= emp_data = combined[2] =#
-            pop_data = PopulationData(p, d, matrix_std, experiment_type)
-            emp_data = EmpiricalData(pop_data, n)
-            #= push!(debug_data, [pop_data, emp_data]) =#
-            #= savevar(fname, debug_data) =#
-            ground_truth_norms[trial] = vecnorm(pop_data.B)
+          for k in ks
+            errors1_trials = zeros(trials)
+            lambdas1_trials = zeros(trials)
+            errors2_trials = zeros(trials)
+            lambdas2_trials = zeros(trials)
+            errors_llc_trials = zeros(trials)
+            lambdas_llc_trials = zeros(trials)
+            errors_lh_trials = zeros(trials)
+            lambdas_lh_trials = zeros(trials)
+            ground_truth_norms = zeros(trials)
 
-            #= for lambdas in lambdas_col =#
-            B0 = zeros(p, p)
-            constr_data = ConstraintData(p)
-            admm_data = ADMMData(emp_data, constr_data, 1.0)
-            admm_data.tol_abs = 5e-4
-            admm_data.tol_rel = 1e-3
-            admm_data.quic_data.print_stats = false
-            admm_data.quic_data.tol = 1e-6
-            admm_data.dual_balancing = true
-            admm_data.bb = false
-            admm_data.tighten = true
-            admm_data.mu = 500
-            admm_data.tau = 1.5
-            admm_data.B0 = B0
-            rho = 1.0
-            #= rho = 0.8670764957916309 =#
-            admm_data.rho = rho
-            admm_data.low_rank = experiment_type == "single"
-            lh_data = VanillaLHData(p, 1, B0)
-            lh_data.low_rank = experiment_type == "single"
-            lh_data.final_tol = 1e-3
-            lh_data.use_constraint = false
-            lh_data.continuation = false
+            weak_cons = falses(trials)
+            strong_cons = falses(trials)
+            cyclics = falses(trials)
 
-            global errors1, errors2, B1, B2
-            #= (B1, B2, err1, err2, lambda1, lambda2, errors1, errors2) = combined_oracle(pop_data, emp_data, admm_data, lh_data, lambdas) =#
-            (B2, err2, lambda2, errors2) = min_constr_lh_oracle(pop_data, emp_data, lh_data, lambdas) 
-            #= (B, err, lambda, _) = llc(pop_data, emp_data, lambdas) =#
-            #= errors1_trials[trial] = err1 =#
-            errors2_trials[trial] = err2
-            #= errors_llc_trials[trial] = err =#
-            #= lambdas1_trials[trial] = lambda1 =#
-            lambdas2_trials[trial] = lambda2
-            #= lambdas_llc_trials[trial] = lambda =#
+            for trial in 1:trials
+              println("Generating data")
+              #= combined = loadvar(fname)[1] =#
+              #= pop_data = combined[1] =#
+              #= emp_data = combined[2] =#
+              global pop_data = PopulationData(p, d, matrix_std, experiment_type, k = k)
 
-            println()
-            #= println("Difference between ADMM results: ", vecnorm(B_admm - B_admm2)) =#
-            #= println("ADMM, difference: ", err1) =#
-            println("LH, difference: ", err2)
-            #= end =#
+              # Determine connectedness
+              G = DiGraph(pop_data.B)
+              strong_cons[trial] = is_strongly_connected(G)
+              weak_cons[trial] = is_weakly_connected(G)
+              cyclics[trial] = is_cyclic(G)
 
-            push!(combined_results, Dict("n"=>n, "p"=>p, "d"=>d,
-                                         #= "errs1"=> errors1_trials, =#
-                                         "errs2"=>errors2_trials,
-                                         #= "errs_llc"=>errors_llc_trials, =#
-                                         #= "lambdas1"=>lambdas1_trials, =#
-                                         "lambdas2"=>lambdas2_trials,
-                                         #= "lambdas_llc"=>lambdas_llc_trials, =#
-                                         "gt"=>ground_truth_norms))
+              emp_data = EmpiricalData(pop_data, n)
+              #= push!(debug_data, [pop_data, emp_data]) =#
+              #= savevar(fname, debug_data) =#
+              ground_truth_norms[trial] = vecnorm(pop_data.B)
 
-            fname = "CausalML/results/results4_norm_varn_noconstr_nocont" * suffix * ".bin"
-            #= jldopen(fname, "w") do file =#
-            open(fname, "w") do file
-              serialize(file, combined_results)
-                #= write(file, "combined_results", combined_results) =#
+              #= for lambdas in lambdas_col =#
+                B0 = zeros(p, p)
+                constr_data = ConstraintData(p)
+                admm_data = ADMMData(emp_data, constr_data, 1.0)
+                admm_data.tol_abs = 5e-4
+                admm_data.tol_rel = 1e-3
+                admm_data.quic_data.print_stats = false
+                admm_data.quic_data.tol = 1e-6
+                admm_data.dual_balancing = true
+                admm_data.bb = false
+                admm_data.tighten = true
+                admm_data.mu = 500
+                admm_data.tau = 1.5
+                admm_data.B0 = B0
+                rho = 1.0
+                #= rho = 0.8670764957916309 =#
+                admm_data.rho = rho
+                admm_data.low_rank = experiment_type != "binary"
+                #= admm_data.low_rank = true =#
+                lh_data = VanillaLHData(p, 1, B0)
+                lh_data.low_rank = experiment_type != "binary"
+                #= lh_data.low_rank = true =#
+                lh_data.final_tol = 1e-3
+                lh_data.use_constraint = true
+
+                global errors1, errors2, B1, B2
+                # Comined run with continuation
+                (B1, B2, err1, err2, lambda1, lambda2, errors1, errors2) = combined_oracle(pop_data, emp_data, admm_data, lh_data, lambdas)
+
+                # Run only likelihood
+                lh_data.continuation = false
+                lh_data.B0 = zeros(p, p)
+                (B_lh, err_lh, lambda_lh, errors_lh) = min_constr_lh_oracle(pop_data, emp_data, lh_data, lambdas) 
+                (B, err, lambda, _) = llc(pop_data, emp_data, lambdas)
+                errors1_trials[trial] = err1
+                errors2_trials[trial] = err2
+                errors_llc_trials[trial] = err
+                errors_lh_trials[trial] = err_lh
+                lambdas1_trials[trial] = lambda1
+                lambdas2_trials[trial] = lambda2
+                lambdas_llc_trials[trial] = lambda
+                lambdas_lh_trials[trial] = lambda_lh
+
+                println()
+                #= println("Difference between ADMM results: ", vecnorm(B_admm - B_admm2)) =#
+                println("ADMM, difference: ", err1)
+                println("LH, difference: ", err2)
+              #= end =#
+
+              push!(combined_results, Dict("n"=>n, "p"=>p, "d"=>d,
+                                           "k"=>k,
+                                           "errs1"=> errors1_trials,
+                                           "errs2"=>errors2_trials,
+                                           "errs_lh" => errors_lh_trials,
+                                           "errs_llc"=>errors_llc_trials,
+                                           "lambdas1"=>lambdas1_trials,
+                                           "lambdas2"=>lambdas2_trials,
+                                           "lambdas_llc"=>lambdas_llc_trials,
+                                           "lambdas_lh"=>lambdas_lh_trials,
+                                           "weak_cons" => weak_cons,
+                                           "strong_cons" => strong_cons,
+                                           "cyclics" => cyclics,
+                                           "exps" => pop_data.E,
+                                           "gt"=>ground_truth_norms))
+
+              fname = "CausalML/results/results_nonorm_vark_" * suffix * ".bin"
+              open(fname, "w") do file
+                serialize(file, combined_results)
+              end
             end
-          end
 
-          #= save(fname, "combined_results", combined_results) =#
+          end
         end
       end
     end
@@ -447,6 +480,15 @@ module CausalMLTest
     println("LLC, difference: ", vecnorm(B_llc - pop_data.B))
   end
 
+  function gen_test()
+    p = 100
+    d = 5
+    matrix_std = 0.8
+    experiment_type = "bounded"
+    global pop_data = PopulationData(p, d, matrix_std, experiment_type, k = 4)
+  end
+
+
 	#= fast_lh_test() =#
 	#= lbfgsb_test_2() =#
 	#= quic_test() =#
@@ -455,8 +497,11 @@ module CausalMLTest
   #= llc_test() =#
   #= lh_oracle_test() =#
   #= combined_oracle_test() =#
-  combined_oracle_screen()
   #= combined_llc_screen() =#
 	#= l2_constr_test() =#
 	#= l2_constr_test_sticky() =#
+
+
+  combined_oracle_screen()
+  #= gen_test() =#
 end
