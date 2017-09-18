@@ -1,6 +1,6 @@
 # vim: ts=2 sw=2 et
 module CausalML
-export gen_b, PopulationData, EmpiricalData, lh, l1_wrap, mat2vec, vec2mat, min_vanilla_lh, VanillaLHData, min_constraint_lh, quic_old, quic, QuadraticPenaltyData, min_admm, ConstraintData, ADMMData, QuadraticPenaltyData_old, min_admm_old, ConstraintData_old, ADMMData_old, min_admm_oracle, llc, symmetrize!, min_constr_lh_oracle, combined_oracle, savevar
+export gen_b, gen_overlap_cycles, PopulationData, EmpiricalData, lh, l1_wrap, mat2vec, vec2mat, min_vanilla_lh, VanillaLHData, min_constraint_lh, quic_old, quic, QuadraticPenaltyData, min_admm, ConstraintData, ADMMData, QuadraticPenaltyData_old, min_admm_old, ConstraintData_old, ADMMData_old, min_admm_oracle, llc, symmetrize!, min_constr_lh_oracle, combined_oracle, savevar
 
 #using Plots
 using Lbfgsb
@@ -15,6 +15,7 @@ using Calculus
 #= using RGlasso =#
 #= using JLD =#
 using Lasso
+using LightGraphs
 
 first_pass = true
 admm_path = []
@@ -58,6 +59,67 @@ function gen_b(p, d, std)
  return B
 end
 
+function gen_overlap_cycles(p, horz, vert, std)
+  if !(p == 2*vert + 2*horz || mod(p - 2*vert - 2*horz, 2*horz + vert - 1) == 0)
+    error("Inadmissible choice of p, vert and horz.")
+  end
+
+  B = zeros(p, p)
+  element() = std*(2*rand()-1)
+  #= element() = 1 =#
+
+  # Draw first cycle
+  for i = 1:horz
+    B[i, i+1] = element()
+  end
+  top_right = horz+1
+  counter = top_right
+  for i = 0:vert-1
+    B[counter + i, counter + i + 1] = element()
+  end
+  counter += vert
+  bottom_right = counter
+  for i = 0:horz-1
+    B[counter + i, counter + i + 1] = element()
+  end
+  counter += horz
+  for i = 0:vert-2
+    B[counter + i, counter + i + 1] = element()
+  end
+  counter += vert-1
+  B[counter, 1] = element()
+  counter += 1
+
+  # Draw remaining cycles
+  remaining = p - 2*vert - 2*horz
+  while remaining > 0
+    B[top_right, counter] = element()
+    for i = 0:horz-2
+      B[counter + i, counter + i + 1] = element()
+    end
+    counter += horz - 1
+    top_right = counter
+    #= println("Top right: ", top_right) =#
+    for i = 0:vert-1
+      B[counter + i, counter + i + 1] = element()
+    end
+    counter += vert
+    bottom_right_new = counter
+    #= println("Bottom right: ", bottom_right_new) =#
+    for i = 0:horz-2
+      B[counter + i, counter + i + 1] = element()
+    end
+    counter += horz-1
+    B[counter, bottom_right] = element()
+    bottom_right = bottom_right_new
+    counter += 1
+
+    remaining -= 2*horz + vert - 1
+  end
+  
+  return B
+end
+
 function hard_thresh(x, t)
   return abs(x) >= t ? x : 0.0
 end
@@ -76,13 +138,20 @@ type PopulationData
   I
   E
 
-  function PopulationData(p, d, std, experiment_type; k = 1)
+  function PopulationData(p, d, std, experiment_type; k = 1, graph_type = "random", horz = 1, vert = 1)
     ret = new()
     ret.p = p
     ret.d = d
     ret.std = std
     #= ret.B = gen_b(p, d, std/sqrt(d*p)) =#
-    ret.B = gen_b(p, d, std/d)
+    if graph_type == "random"
+      ret.B = gen_b(p, d, std/d)
+    elseif graph_type == "overlap_cycles"
+      ret.d = 3
+      ret.B = gen_overlap_cycles(p, horz, vert, std/d)
+    else
+      error("Unknown graph type")
+    end
     #= ret.B = hard_thresh.(ret.B, std/d) =#
 
     # Generate experiment data

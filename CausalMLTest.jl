@@ -291,11 +291,16 @@ module CausalMLTest
   end
 
   function combined_oracle_screen()
-    experiment_type = "bounded"
+    experiment_type = "binary"
     #= k = 5 =#
-    ks = 2:1:12
-    #= ks = [5] =#
-    ps = [100]
+    #= ks = 2:1:12 =#
+    ks = [1]
+    vert = 5
+    horz = 5
+    ps_start = 2*vert + 2*horz
+    ps = ps_start:2*horz+vert-1:120
+    println("Values for p: ", ps)
+    #= ps = [100] =#
     #= ps = 10:10:100 =#
     #= ps = [10] =#
     #= ns = map(x -> ceil(Int32, x), logspace(log10(50), 4, 10)) =#
@@ -350,7 +355,7 @@ module CausalMLTest
               #= combined = loadvar(fname)[1] =#
               #= pop_data = combined[1] =#
               #= emp_data = combined[2] =#
-              global pop_data = PopulationData(p, d, matrix_std, experiment_type, k = k)
+              global pop_data = PopulationData(p, d, matrix_std, experiment_type, graph_type = "overlap_cycles", k = k, horz = horz, vert = vert)
 
               # Determine connectedness
               G = DiGraph(pop_data.B)
@@ -428,7 +433,7 @@ module CausalMLTest
                                            "exps" => pop_data.E,
                                            "gt"=>ground_truth_norms))
 
-              fname = "CausalML/results/results_nonorm_vark_" * suffix * ".bin"
+              fname = "CausalML/results/results_nonorm_cycles_" * suffix * ".bin"
               open(fname, "w") do file
                 serialize(file, combined_results)
               end
