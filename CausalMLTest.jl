@@ -332,7 +332,7 @@ module CausalMLTest
     #= ps = [10] =#
     #= ns = map(x -> ceil(Int32, x), logspace(log10(50), 4, 10)) =#
     #= ns = map(x -> ceil(Int32, x), logspace(4, log10(25000), 5)) =#
-    ns = map(x -> ceil(Int32, x), logspace(log10(50), log10(25000), 15))
+    ns = map(x -> ceil(Int32, x), logspace(log10(200), log10(25000), 15))
     #= ns = [50] =#
     #= ns = 10000 =#
     #= ds = union(1:10, 12:2:20, 24:4:40) =#
