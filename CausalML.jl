@@ -1,6 +1,6 @@
 # vim: ts=2 sw=2 et
 module CausalML
-export gen_b, gen_overlap_cycles, PopulationData, EmpiricalData, lh, l1_wrap, mat2vec, vec2mat, min_vanilla_lh, VanillaLHData, min_constraint_lh, quic_old, quic, QuadraticPenaltyData, min_admm, ConstraintData, ADMMData, QuadraticPenaltyData_old, min_admm_old, ConstraintData_old, ADMMData_old, min_admm_oracle, llc, symmetrize!, min_constr_lh_oracle, combined_oracle, savevar
+export gen_b, gen_overlap_cycles, gen_clusters, PopulationData, EmpiricalData, lh, l1_wrap, mat2vec, vec2mat, min_vanilla_lh, VanillaLHData, min_constraint_lh, quic_old, quic, QuadraticPenaltyData, min_admm, ConstraintData, ADMMData, QuadraticPenaltyData_old, min_admm_old, ConstraintData_old, ADMMData_old, min_admm_oracle, llc, symmetrize!, min_constr_lh_oracle, combined_oracle, savevar, k_fold_split, min_admm_cv, min_constr_lh_cv, combined_cv
 
 #using Plots
 using Lbfgsb
@@ -120,6 +120,22 @@ function gen_overlap_cycles(p, horz, vert, std)
   return B
 end
 
+function gen_clusters(p, d, std)
+  cluster_size = d + 1
+  num_clusters = ceil(Int64, p/cluster_size)
+  B = zeros(p, p)
+  for i = 1:num_clusters
+    actual_size = min(cluster_size, p - (i-1)*cluster_size)
+    A = std*2*rand(actual_size, actual_size)
+    for j = 1:actual_size
+      A[j, j] = 0
+    end
+    r = ((i-1)*cluster_size + 1):min(p, i*cluster_size)
+    B[r, r] = A
+  end
+  return B
+end
+
 function hard_thresh(x, t)
   return abs(x) >= t ? x : 0.0
 end
@@ -146,9 +162,13 @@ type PopulationData
     #= ret.B = gen_b(p, d, std/sqrt(d*p)) =#
     if graph_type == "random"
       ret.B = gen_b(p, d, std/d)
+    elseif graph_type == "random_no_norm"
+      ret.B = gen_b(p, d, std)
     elseif graph_type == "overlap_cycles"
       ret.d = 3
-      ret.B = gen_overlap_cycles(p, horz, vert, std/d)
+      ret.B = gen_overlap_cycles(p, horz, vert, std/ret.d)
+    elseif graph_type == "clusters"
+      ret.B = gen_clusters(p, d, std/d)
     else
       error("Unknown graph type")
     end
@@ -252,6 +272,22 @@ type PopulationData
 
         push!(ret.Us, U)
       end
+    elseif experiment_type == "all_but_one"
+      for e = 1:p
+        mask = trues(p)
+        mask[e] = false
+        push!(ret.Us_ind, find(~mask))
+        push!(ret.Js_ind, find(mask))
+        # println(~(mask.==1))
+
+        U = ones(p)
+        U[mask] = 0
+        U = diagm(U)
+
+        push!(ret.Us, U)
+      end
+    else
+      error("Unrecognized experiment_type")
     end
     ret.E = length(ret.Us)
 
@@ -288,7 +324,7 @@ type EmpiricalData
   sigmas_emp
   Xs
 
-  function EmpiricalData(pop_data, n)
+  function EmpiricalData(pop_data, n; store_samples = false, Xs = [])
     ret = new()
     ret.p = pop_data.p
     ret.E = pop_data.E
@@ -318,22 +354,52 @@ type EmpiricalData
     ret.sigmas_emp = []
 
     # Generate covariance matrices
-    ret.Xs = []
+    ret.Xs = Xs
+    calc_new_samples = length(Xs) == 0
+
     for e = 1:ret.E
       # Population level matrices
       Ainv = pop_data.Ainvs[e]
 
       # Empirical covariance
-      Z = randn(ret.p, ret.n)
-      #= push!(ret.Xs, Ainv \ Z) =#
-      #= X = ret.Xs[e] =#
-      X = Ainv \ Z
+      if calc_new_samples
+        Z = randn(ret.p, ret.n)
+        X = Ainv \ Z
+      else
+        X = ret.Xs[e]
+      end
+      if store_samples
+        push!(ret.Xs, copy(X))
+      end
       sigma_emp = X*X'/n
       push!(ret.sigmas_emp, sigma_emp)
     end
 
     return ret
   end
+end
+
+function k_fold_split(pop_data, emp_data, k, i)
+  """
+  Return two new emp_data objects, one with the training data, the other with the testing data from the ith fold of a k-fold split.
+  """
+
+  n = emp_data.n
+  fold_length = ceil(Int64, n/k)
+
+  if i < k
+    actual_length = fold_length
+  elseif i == k
+    actual_length = n - (k - 1) * fold_length
+  end
+
+  test_r = (i-1)*fold_length + 1:min(i*fold_length, n)
+  train_r = setdiff(1:n, test_r)
+
+  emp_data_test = EmpiricalData(pop_data, length(test_r), store_samples = false, Xs = [X[:, test_r] for X in emp_data.Xs])
+  emp_data_train = EmpiricalData(pop_data, length(train_r), store_samples = false, Xs = [X[:, train_r] for X in emp_data.Xs])
+
+  return (emp_data_train, emp_data_test)
 end
 
 # Index matrices for reuse
@@ -447,7 +513,8 @@ type VanillaLHData
   lambda # Regularization parameter
   B0 # Starting value
   B # TODO: Do I need this?
-  Ainv::Array{Float64,2} # I - B, or I - U*B
+  Ainv::Array{Float64,2} # I - B
+  Ainve::Array{Float64,2} # I - U*B
   Ainv2::Array{Float64,2} # (I - B)' * (I - B)
   Ainv2e::Array{Float64,2} # (I - U*B)' * (I - U*B)
   Breds::Array{Array{Float64,2},1} # Low rank B updates
@@ -498,7 +565,9 @@ end
 function VanillaLHData(p, lambda, B0)
   return VanillaLHData(lambda, B0,
                        zeros(p, p), zeros(p, p),
-                       zeros(p, p), zeros(p, p),
+                       zeros(p, p),
+                       zeros(p, p), # Ainve
+                       zeros(p, p),
                        [], [], [],
                        LinAlg.Cholesky(zeros(p,p), :U),
                        zeros(p,p),
@@ -545,6 +614,8 @@ function lh(emp_data, data, b, g::Vector; reduced = true, low_rank = false)
   vec2mat(b, emp_data, inplace = data.B)
   I = emp_data.I
   p = emp_data.p
+
+  temp_no_low_rank = false
 
   if compute_grad
     fill!(g, 0.0)
@@ -598,41 +669,51 @@ function lh(emp_data, data, b, g::Vector; reduced = true, low_rank = false)
       BLAS.gemm!('N', 'N', -1.0, data.Bredst[e], data.Breds[e], 1.0, data.Ainv2e)
       symmetrize!(data.Ainv2e)
 
-      val += BLAS.dot(p^2, data.Ainv2e, 1, emp_data.sigmas_emp[e], 1)
 
       copy!(data.CholfacteFactor, data.CholfactFactor)
       data.Cholfacte = LinAlg.Cholesky(data.CholfacteFactor, :U)
 
-      for j = 1:length(J_ind)
-        fill!(data.update_vec, 0.0)
-        data.update_vec[J_ind[j]] = 1.0
-        copy!(data.downdate_vec, view(data.Bredst[e], :, j))
-        scale!(data.downdate_vec, -1.0)
-        data.downdate_vec[J_ind[j]] += 1.0
-        LinAlg.lowrankupdate!(data.Cholfacte, data.update_vec)
-        LinAlg.lowrankdowndate!(data.Cholfacte, data.downdate_vec)
-        #= copy!(data.diag, view(data.Cholfacte.factors, emp_data.diag_idx)) =#
-      end
       try
-        val -= sum(2*log(diag(data.Cholfacte.factors)))
-      catch
-        println("Warning: (I-U*B)'*(I-U*B) not positive definite.")
-        val = Inf
+        for j = 1:length(J_ind)
+          fill!(data.update_vec, 0.0)
+          data.update_vec[J_ind[j]] = 1.0
+          copy!(data.downdate_vec, view(data.Bredst[e], :, j))
+          scale!(data.downdate_vec, -1.0)
+          data.downdate_vec[J_ind[j]] += 1.0
+          LinAlg.lowrankupdate!(data.Cholfacte, data.update_vec)
+          LinAlg.lowrankdowndate!(data.Cholfacte, data.downdate_vec)
+          #= copy!(data.diag, view(data.Cholfacte.factors, emp_data.diag_idx)) =#
+        end
+        try
+          val -= sum(2*log(diag(data.Cholfacte.factors)))
+        catch
+          println("Warning: (I-U*B)'*(I-U*B) not positive definite.")
+          val = Inf
+        end
+        val += BLAS.dot(p^2, data.Ainv2e, 1, emp_data.sigmas_emp[e], 1)
+      catch err
+        if isa(err, Base.LinAlg.PosDefException)
+          println("Warning: cannot use low rank decomposition because matrix is not positive definite any more.")
+          temp_no_low_rank = true
+        else
+          rethrow()
+        end
       end
-    else
+    end
+    if !low_rank || temp_no_low_rank
       # Compute theta
-      fill!(data.Ainv, 0.0)
+      fill!(data.Ainve, 0.0)
       for i = 1:p
-        data.Ainv[i, i] = 1
+        data.Ainve[i, i] = 1
       end
-      BLAS.axpy!(-1.0, view(data.B, emp_data.Us_ind[e], :), view(data.Ainv, emp_data.Us_ind[e], :))
-      BLAS.gemm!('T', 'N', 1.0, data.Ainv, data.Ainv, 0.0, data.Ainv2)
-      symmetrize!(data.Ainv2)
-      val += BLAS.dot(p^2, emp_data.sigmas_emp[e], 1, data.Ainv2, 1)
-      copy!(data.CholfactFactor, data.Ainv2)
+      BLAS.axpy!(-1.0, view(data.B, emp_data.Us_ind[e], :), view(data.Ainve, emp_data.Us_ind[e], :))
+      BLAS.gemm!('T', 'N', 1.0, data.Ainve, data.Ainve, 0.0, data.Ainv2e)
+      symmetrize!(data.Ainv2e)
+      val += BLAS.dot(p^2, emp_data.sigmas_emp[e], 1, data.Ainv2e, 1)
+      copy!(data.CholfacteFactor, data.Ainv2e)
       # Use Symmetric() to handle round-off errors above
       try
-        cholfact!(Symmetric(data.CholfactFactor))
+        cholfact!(Symmetric(data.CholfacteFactor))
       catch y
         #= println("Cholesky exception!") =#
         #= println("lambda = ", data.lambda) =#
@@ -646,7 +727,7 @@ function lh(emp_data, data, b, g::Vector; reduced = true, low_rank = false)
         return val
       end
       try
-        val -= sum(2*log(diag(data.CholfactFactor)))
+        val -= sum(2*log(diag(data.CholfacteFactor)))
       catch
         println("Warning: (I-U*B)'*(I-U*B) not positive definite.")
         val = Inf
@@ -664,6 +745,8 @@ function lh(emp_data, data, b, g::Vector; reduced = true, low_rank = false)
       #=   val = Inf =#
       #= end =#
       # println(val)
+
+      temp_no_low_rank = false
     end
 
     # Gradient calculation
@@ -688,13 +771,13 @@ function lh(emp_data, data, b, g::Vector; reduced = true, low_rank = false)
       #=   BLAS.axpy!(1.0, view(data.Gmat, find_offdiag_idx), g) =#
       else
         copy!(data.diff, emp_data.sigmas_emp[e])
-        LAPACK.potri!('U', data.CholfactFactor)
-        data.CholfactFactor[emp_data.strict_lower_idx] = 0.0
-        transpose!(data.CholfactFactorT, data.CholfactFactor)
-        data.CholfactFactor[emp_data.diag_idx] = 0.0
-        BLAS.axpy!(1.0, data.CholfactFactorT, data.CholfactFactor)
-        BLAS.axpy!(-1.0, data.CholfactFactor, data.diff)
-        BLAS.gemm!('N', 'N', 2.0, data.Ainv, data.diff, 0.0, data.Gmat)
+        LAPACK.potri!('U', data.CholfacteFactor)
+        data.CholfacteFactor[emp_data.strict_lower_idx] = 0.0
+        transpose!(data.CholfacteFactorT, data.CholfacteFactor)
+        data.CholfacteFactor[emp_data.diag_idx] = 0.0
+        BLAS.axpy!(1.0, data.CholfacteFactorT, data.CholfacteFactor)
+        BLAS.axpy!(-1.0, data.CholfacteFactor, data.diff)
+        BLAS.gemm!('N', 'N', 2.0, data.Ainve, data.diff, 0.0, data.Gmat)
         data.Gmat[emp_data.Js_ind[e],:] = 0.0
         BLAS.axpy!(-1.0, view(data.Gmat, emp_data.find_offdiag_idx), g)
         #= try =#
@@ -2492,6 +2575,98 @@ function combined_oracle(pop_data, emp_data, admm_data, lh_data, lambdas)
   (B2, err2, lambda2, errors2) = min_constr_lh_oracle(pop_data, emp_data, lh_data, lambdas) 
   return (B1, B2, err1, err2, lambda1, lambda2, errors1, errors2)
 end
+
+function min_admm_cv(pop_data, emp_data, admm_data, lambdas, k)
+  lhs = zeros(length(lambdas))
+  B0_old = copy(admm_data.B0)
+  B_admms = [copy(admm_data.B0) for i = 1:k]
+  emp_datas_train = []
+  emp_datas_test = []
+  p = pop_data.p
+
+  lh_data = VanillaLHData(p, 0, zeros(p, p))
+
+  for i = 1:k
+    (emp_train, emp_test) = k_fold_split(pop_data, emp_data, k, i)
+    push!(emp_datas_train, emp_train)
+    push!(emp_datas_test, emp_test)
+  end
+
+  for i = 1:length(lambdas)
+    println("lambda = ", lambdas[i])
+    lh_val = 0
+    for j = 1:k
+      admm_data.B0 = copy(B_admms[j])
+      admm_data.quic_data.lambda = lambdas[i]
+      B_admms[j] = copy(min_admm(emp_datas_train[j], admm_data))
+      println(size(B_admms[j]))
+      lh_val += lh(emp_datas_test[j], lh_data, mat2vec(B_admms[j], emp_data, reduced = true), [])
+    end
+    lhs[i] = lh_val
+  end
+
+  (lh_val, ind) = findmin(lhs)
+  admm_data.B0 = B0_old
+  admm_data.quic_data.lambda = lambdas[ind]
+  B = min_admm(emp_data, admm_data)
+  return (B, lh_val, lambdas[ind], lhs)
+end
+
+function min_constr_lh_cv(pop_data, emp_data, lh_data, lambdas, k)
+  lhs = zeros(length(lambdas))
+  B_lhs = [copy(lh_data.B0) for i =1:k]
+  B0_old = copy(lh_data.B0)
+
+  emp_datas_train = []
+  emp_datas_test = []
+  p = pop_data.p
+
+  for i = 1:k
+    (emp_train, emp_test) = k_fold_split(pop_data, emp_data, k, i)
+    push!(emp_datas_train, emp_train)
+    push!(emp_datas_test, emp_test)
+  end
+
+  for i = 1:length(lambdas)
+    println("lambda = ", lambdas[i])
+    lh_val = 0
+    lh_data.lambda = lambdas[i]
+    for j = 1:k
+      if lh_data.continuation
+        lh_data.B0 = copy(B_lhs[j])
+      end
+      if lh_data.use_constraint
+        B_lhs[j] = copy(min_constraint_lh(emp_datas_train[j], lh_data))
+      else
+        B_lh[j] = copy(min_vanilla_lh(emp_data_datas_train[j], lh_data))
+      end
+      lh_val += lh(emp_datas_test[j], lh_data, mat2vec(B_lhs[j], emp_data, reduced = true), [])
+    end
+    lhs[i] = lh_val
+  end
+
+
+  (lh_val, ind) = findmin(lhs)
+  lh_data.B0 = B0_old
+  lh_data.lambda = lambdas[ind]
+  if lh_data.use_constraint
+    B = copy(min_constraint_lh(emp_data, lh_data))
+  else
+    B = copy(min_vanilla_lh(emp_data_data, lh_data))
+  end
+
+  return (B, lh_val, lambdas[ind], lhs)
+end
+
+function combined_cv(pop_data, emp_data, admm_data, lh_data, lambdas, k, c)
+  (B1, lh1, lambda1, lhs1) = min_admm_cv(pop_data, emp_data, admm_data, lambdas, k)
+  lh_data.x_base = mat2vec(B1, emp_data)
+  lh_data.upper_bound = c * min(1/pop_data.p, 1/emp_data.E)
+  lh_data.B0 = copy(B1)
+  (B2, lh2, lambda2, lhs2) = min_constr_lh_cv(pop_data, emp_data, lh_data, lambdas, k) 
+  return (B1, B2, lh1, lh2, lambda1, lambda2, lhs1, lhs2)
+end
+
 
 # LLC functionality
 function delete_shift_ind(l, i)

@@ -44,9 +44,11 @@ module CausalMLTest
 	#= run_ops = ["fast_lh_test"] =# 
 
 	# Generate data
-	#= println("Generating data") =#
-	#= pop_data = PopulationData(p, d, matrix_std, experiment_type) =#
-	#= emp_data = EmpiricalData(pop_data, n) =#
+  function gen_data()
+    println("Generating data")
+    pop_data = PopulationData(p, d, matrix_std, experiment_type)
+    emp_data = EmpiricalData(pop_data, n)
+  end
 
 	#= if "lbfgsb_test" in run_ops =#
 	function lbfgsb_test()
@@ -118,6 +120,7 @@ module CausalMLTest
 		@time global l1 = lh(emp_data, lh_data, mat2vec(B0, emp_data), g1)
 		@time global l2 = lh(emp_data, lh_data, mat2vec(B0, emp_data), g2, low_rank = true)
 		#= println(lh_data.B) =#
+    println(abs(l1-l2))
 		println(vecnorm(g1-g2))
 		#= println("Gradient difference: ", vecnorm(g3 - g1)) =#
 		B0 = randn(p, p)
@@ -129,6 +132,7 @@ module CausalMLTest
 		@time global l4 = lh(emp_data, lh_data, mat2vec(B0, emp_data), g2, low_rank = true)
 		println(l3)
 		println(l4)
+    println(abs(l3-l4))
 		println(vecnorm(g1-g2))
 	end
 
@@ -266,28 +270,51 @@ module CausalMLTest
 	end
 
   function combined_oracle_test()
-		B0 = zeros(p, p)
+    experiment_type = "binary"
+    n = 2000
+    p = 50
+    d = 5
+    k = 2
+    lambdas = flipdim(logspace(-4, 0, 30), 1)
+
+    println("Generating data")
+    global pop_data = PopulationData(p, d, matrix_std, experiment_type)
+
+    emp_data = EmpiricalData(pop_data, n)
+
+    B0 = zeros(p, p)
     constr_data = ConstraintData(p)
     admm_data = ADMMData(emp_data, constr_data, 1.0)
-    admm_data.tol = 1e-2
+    admm_data.tol_abs = 5e-4
+    admm_data.tol_rel = 1e-3
     admm_data.quic_data.print_stats = false
     admm_data.quic_data.tol = 1e-6
+    admm_data.dual_balancing = true
+    admm_data.bb = false
+    admm_data.tighten = true
+    admm_data.mu = 500
+    admm_data.tau = 1.5
     admm_data.B0 = B0
     rho = 1.0
+    #= rho = 0.8670764957916309 =#
     admm_data.rho = rho
     admm_data.low_rank = experiment_type != "binary"
 		lh_data = VanillaLHData(p, lambda, B0)
     lh_data.low_rank = experiment_type != "binary"
 
-    lambdas = logspace(-1, 1, 5)
+    lambdas = logspace(-4, 0, 30)
 
     global errors1, errors2, B1, B2
-    (B1, B2, err1, err2, lambda1, lambda2, errors1, errors2) = combined_oracle(pop_data, emp_data, admm_data, lh_data, lambdas)
+    (B1_oracle, B2_oracle, err1, err2, lambda1_oracle, lambda2_oracle, errors1, errors2) = combined_oracle(pop_data, emp_data, admm_data, lh_data, lambdas)
+    (B1_cv, B2_cv, lh1, lh2, lambda1_cv, lambda2_cv, lhs1, lhs2) = combined_cv(pop_data, emp_data, admm_data, lh_data, lambdas, k, 100)
 
     println()
     #= println("Difference between ADMM results: ", vecnorm(B_admm - B_admm2)) =#
-    println("ADMM, difference: ", err1)
-    println("LH, difference: ", err2)
+    println("ADMM, oracle lambda: ", lambda1_oracle, ", difference: ", err1)
+    println("ADMM, cv lambda: ", lambda1_cv, ", difference: ", vecnorm(B1_cv - pop_data.B))
+
+    println("LH, oracle lambda: ", lambda2_oracle, ", difference: ", err2)
+    println("LH, cv lambda: ", lambda2_cv, ", difference: ", vecnorm(B2_cv - pop_data.B))
   end
 
   function combined_oracle_screen()
@@ -298,20 +325,20 @@ module CausalMLTest
     vert = 5
     horz = 5
     ps_start = 2*vert + 2*horz
-    ps = ps_start:2*horz+vert-1:120
-    println("Values for p: ", ps)
-    #= ps = [100] =#
+    #= ps = ps_start:2*horz+vert-1:120 =#
+    #= println("Values for p: ", ps) =#
+    ps = [100]
     #= ps = 10:10:100 =#
     #= ps = [10] =#
     #= ns = map(x -> ceil(Int32, x), logspace(log10(50), 4, 10)) =#
     #= ns = map(x -> ceil(Int32, x), logspace(4, log10(25000), 5)) =#
-    #= ns = map(x -> ceil(Int32, x), logspace(log10(50), log10(25000), 15)) =#
+    ns = map(x -> ceil(Int32, x), logspace(log10(50), log10(25000), 15))
     #= ns = [50] =#
-    ns = 10000
+    #= ns = 10000 =#
     #= ds = union(1:10, 12:2:20, 24:4:40) =#
     #= ds = 1:10 =#
     #= ds = [5,6] =#
-    ds = 5
+    ds = [5, 10, 15]
     trials = 1
     global combined_results = []
     #= lambdas = flipdim(logspace(-4, -1, 40), 1) =#
@@ -355,7 +382,8 @@ module CausalMLTest
               #= combined = loadvar(fname)[1] =#
               #= pop_data = combined[1] =#
               #= emp_data = combined[2] =#
-              global pop_data = PopulationData(p, d, matrix_std, experiment_type, graph_type = "overlap_cycles", k = k, horz = horz, vert = vert)
+              #= global pop_data = PopulationData(p, d, matrix_std, experiment_type, graph_type = "overlap_cycles", k = k, horz = horz, vert = vert) =#
+              global pop_data = PopulationData(p, d, matrix_std, experiment_type, graph_type = "clusters")
 
               # Determine connectedness
               G = DiGraph(pop_data.B)
@@ -433,7 +461,7 @@ module CausalMLTest
                                            "exps" => pop_data.E,
                                            "gt"=>ground_truth_norms))
 
-              fname = "CausalML/results/results_nonorm_cycles_" * suffix * ".bin"
+              fname = "CausalML/results/results_clusters" * suffix * ".bin"
               open(fname, "w") do file
                 serialize(file, combined_results)
               end
@@ -490,9 +518,103 @@ module CausalMLTest
     d = 5
     matrix_std = 0.8
     experiment_type = "bounded"
-    global pop_data = PopulationData(p, d, matrix_std, experiment_type, k = 4)
+    global pop_data1 = PopulationData(p, d, matrix_std, experiment_type, k = 4)
+    global pop_data2 = PopulationData(p, d, matrix_std, experiment_type, k = 2, graph_type = "clusters")
   end
 
+  function k_fold_test()
+    p = 100
+    d = 5
+    n = 1000
+    matrix_std = 0.8
+    experiment_type = "binary"
+    global pop_data = PopulationData(p, d, matrix_std, experiment_type)
+    global emp_data = EmpiricalData(pop_data, n, store_samples = true)
+    global emp_data_test, emp_data_train
+    (emp_data_train, emp_data_test) = k_fold_split(pop_data, emp_data, 6, 6)
+  end
+
+  function admm_cv_test()
+    experiment_type = "binary"
+    n = 2000
+    p = 50
+    d = 5
+    k = 3
+    lambdas = flipdim(logspace(-4, -1, 30), 1)
+
+    println("Generating data")
+    global pop_data = PopulationData(p, d, matrix_std, experiment_type)
+
+    emp_data = EmpiricalData(pop_data, n)
+
+    B0 = zeros(p, p)
+    constr_data = ConstraintData(p)
+    admm_data = ADMMData(emp_data, constr_data, 1.0)
+    admm_data.tol_abs = 5e-4
+    admm_data.tol_rel = 1e-3
+    admm_data.quic_data.print_stats = false
+    admm_data.quic_data.tol = 1e-6
+    admm_data.dual_balancing = true
+    admm_data.bb = false
+    admm_data.tighten = true
+    admm_data.mu = 500
+    admm_data.tau = 1.5
+    admm_data.B0 = B0
+    rho = 1.0
+    #= rho = 0.8670764957916309 =#
+    admm_data.rho = rho
+    admm_data.low_rank = experiment_type != "binary"
+    lh_data = VanillaLHData(p, 1, B0)
+    lh_data.low_rank = experiment_type != "binary"
+    lh_data.final_tol = 1e-3
+    lh_data.use_constraint = true
+
+    global errors, lhs
+
+    global lh_val2 = lh(emp_data, lh_data, mat2vec(pop_data.B, emp_data), [])
+    println("B lh: ", lh_val2)
+
+    (B_cv, lh_val, lambda_cv, lhs) = min_admm_cv(pop_data, emp_data, admm_data, lambdas, k)
+    (B_oracle, err_oracle, lambda_oracle, errors) = min_admm_oracle(pop_data, emp_data, admm_data, lambdas)
+
+    println("CV: ", lambda_cv, ", ", vecnorm(B_cv - pop_data.B))
+    println("Oracle: ", lambda_oracle, ", ", vecnorm(B_oracle - pop_data.B))
+
+  end
+
+  function lh_cv_test()
+    experiment_type = "binary"
+    n = 100
+    p = 50
+    d = 5
+    k = 2
+    lambdas = flipdim(logspace(-4, 0, 30), 1)
+
+    println("Generating data")
+    global pop_data = PopulationData(p, d, matrix_std, experiment_type)
+
+    emp_data = EmpiricalData(pop_data, n)
+
+    B0 = zeros(p, p)
+    constr_data = ConstraintData(p)
+    lh_data = VanillaLHData(p, 1, B0)
+    lh_data.low_rank = experiment_type != "binary"
+    lh_data.final_tol = 1e-3
+		lh_data.x_base = mat2vec(pop_data.B, emp_data)
+    lh_data.upper_bound = vecnorm(pop_data.B)^2
+    lh_data.use_constraint = true
+
+    global errors, lhs
+
+    global lh_val2 = lh(emp_data, lh_data, mat2vec(pop_data.B, emp_data), [])
+    println("B lh: ", lh_val2)
+
+    (B_cv, lh_val, lambda_cv, lhs) = min_constr_lh_cv(pop_data, emp_data, lh_data, lambdas, k)
+    (B_oracle, err_oracle, lambda_oracle, errors) = min_constr_lh_oracle(pop_data, emp_data, lh_data, lambdas)
+
+    println("CV: ", lambda_cv, ", ", vecnorm(B_cv - pop_data.B))
+    println("Oracle: ", lambda_oracle, ", ", vecnorm(B_oracle - pop_data.B))
+  end
 
 	#= fast_lh_test() =#
 	#= lbfgsb_test_2() =#
@@ -505,8 +627,12 @@ module CausalMLTest
   #= combined_llc_screen() =#
 	#= l2_constr_test() =#
 	#= l2_constr_test_sticky() =#
+  #= gen_test() =#
+  #= k_fold_test() =#
+  #= admm_cv_test() =#
+  #= lh_cv_test() =#
+
 
 
   combined_oracle_screen()
-  #= gen_test() =#
 end
