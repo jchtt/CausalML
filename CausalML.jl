@@ -126,7 +126,7 @@ function gen_clusters(p, d, std)
   B = zeros(p, p)
   for i = 1:num_clusters
     actual_size = min(cluster_size, p - (i-1)*cluster_size)
-    A = std*2*rand(actual_size, actual_size)
+    A = std*2*(rand(actual_size, actual_size) - 1)
     for j = 1:actual_size
       A[j, j] = 0
     end
