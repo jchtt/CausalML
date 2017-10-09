@@ -327,7 +327,7 @@ module CausalMLTest
     ps_start = 2*vert + 2*horz
     #= ps = ps_start:2*horz+vert-1:120 =#
     #= println("Values for p: ", ps) =#
-    ps = [100]
+    ps = [60]
     #= ps = 10:10:100 =#
     #= ps = [10] =#
     #= ns = map(x -> ceil(Int32, x), logspace(log10(50), 4, 10)) =#
@@ -338,7 +338,7 @@ module CausalMLTest
     #= ds = union(1:10, 12:2:20, 24:4:40) =#
     #= ds = 1:10 =#
     #= ds = [5,6] =#
-    ds = [5, 10, 15]
+    ds = [3, 6, 9]
     trials = 1
     global combined_results = []
     #= lambdas = flipdim(logspace(-4, -1, 40), 1) =#
