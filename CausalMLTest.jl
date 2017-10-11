@@ -327,7 +327,7 @@ module CausalMLTest
     ps_start = 2*vert + 2*horz
     #= ps = ps_start:2*horz+vert-1:120 =#
     #= println("Values for p: ", ps) =#
-    ps = [60]
+    ps = [50]
     #= ps = 10:10:100 =#
     #= ps = [10] =#
     #= ns = map(x -> ceil(Int32, x), logspace(log10(50), 4, 10)) =#
@@ -338,7 +338,8 @@ module CausalMLTest
     #= ds = union(1:10, 12:2:20, 24:4:40) =#
     #= ds = 1:10 =#
     #= ds = [5,6] =#
-    ds = [3, 6, 9]
+    #= ds = [3, 6, 9] =#
+    ds = [3]
     trials = 1
     global combined_results = []
     #= lambdas = flipdim(logspace(-4, -1, 40), 1) =#
@@ -383,7 +384,8 @@ module CausalMLTest
               #= pop_data = combined[1] =#
               #= emp_data = combined[2] =#
               #= global pop_data = PopulationData(p, d, matrix_std, experiment_type, graph_type = "overlap_cycles", k = k, horz = horz, vert = vert) =#
-              global pop_data = PopulationData(p, d, matrix_std, experiment_type, graph_type = "clusters")
+              #= global pop_data = PopulationData(p, d, matrix_std, experiment_type, graph_type = "clusters") =#
+              global pop_data = PopulationData(p, d, matrix_std, experiment_type, graph_type = "random_no_norm")
 
               # Determine connectedness
               G = DiGraph(pop_data.B)
@@ -461,7 +463,7 @@ module CausalMLTest
                                            "exps" => pop_data.E,
                                            "gt"=>ground_truth_norms))
 
-              fname = "CausalML/results/results_clusters" * suffix * ".bin"
+              fname = "CausalML/results/results_random_nonorm" * suffix * ".bin"
               open(fname, "w") do file
                 serialize(file, combined_results)
               end
