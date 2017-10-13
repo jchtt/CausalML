@@ -436,6 +436,7 @@ module CausalMLTest
                   # Same thing, with bad initialization
                   B0_bad = 10 * triu(randn(p,p), 1)
                   admm_data.B0 = B0_bad
+                  admm_data.duals = [zeros(emp_data.p, emp_data.p) for e = 1:emp_data.E], # duals
                   lh_data.use_constraint = true
                   (B1_bad, B2_bad, err1_bad, err2_bad, lambda1_bad, lambda2_bad, errors1_bad, errors2_bad) = combined_oracle(pop_data, emp_data, admm_data, lh_data, lambdas)
                   lh_data.use_constraint = false
