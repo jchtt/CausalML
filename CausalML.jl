@@ -1281,7 +1281,7 @@ function QuadraticPenaltyData(p)
                               0.01, # eps
                               false, # print_stats
                               1e-10, # hard_thresh
-                              20, # max_iterations
+                              50, # max_iterations
                              )
 end
 
