@@ -325,16 +325,16 @@ module CausalMLTest
     vert = 5
     horz = 5
     ps_start = 2*vert + 2*horz
-    #= ps = ps_start:2*horz+vert-1:120 =#
+    ps = ps_start:2*horz+vert-1:120
     #= println("Values for p: ", ps) =#
-    ps = [50]
+    #= ps = [50] =#
     #= ps = 10:10:100 =#
     #= ps = [10] =#
     #= ns = map(x -> ceil(Int32, x), logspace(log10(50), 4, 10)) =#
     #= ns = map(x -> ceil(Int32, x), logspace(4, log10(25000), 5)) =#
-    ns = map(x -> ceil(Int32, x), logspace(log10(200), log10(25000), 15))
+    #= ns = map(x -> ceil(Int32, x), logspace(log10(200), log10(25000), 15)) =#
     #= ns = [50] =#
-    #= ns = 10000 =#
+    ns = 10000
     #= ds = union(1:10, 12:2:20, 24:4:40) =#
     #= ds = 1:10 =#
     #= ds = [5,6] =#
@@ -383,9 +383,9 @@ module CausalMLTest
               #= combined = loadvar(fname)[1] =#
               #= pop_data = combined[1] =#
               #= emp_data = combined[2] =#
-              #= global pop_data = PopulationData(p, d, matrix_std, experiment_type, graph_type = "overlap_cycles", k = k, horz = horz, vert = vert) =#
+              global pop_data = PopulationData(p, d, matrix_std, experiment_type, graph_type = "overlap_cycles", k = k, horz = horz, vert = vert)
               #= global pop_data = PopulationData(p, d, matrix_std, experiment_type, graph_type = "clusters") =#
-              global pop_data = PopulationData(p, d, matrix_std, experiment_type, graph_type = "random_no_norm")
+              #= global pop_data = PopulationData(p, d, matrix_std, experiment_type, graph_type = "random_no_norm") =#
 
               # Determine connectedness
               G = DiGraph(pop_data.B)
@@ -463,7 +463,7 @@ module CausalMLTest
                                            "exps" => pop_data.E,
                                            "gt"=>ground_truth_norms))
 
-              fname = "CausalML/results/results_random_nonorm" * suffix * ".bin"
+              fname = "CausalML/results/results_cycles_" * suffix * ".bin"
               open(fname, "w") do file
                 serialize(file, combined_results)
               end

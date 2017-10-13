@@ -1231,11 +1231,12 @@ type QuadraticPenaltyData
   diff::Array{Float64,2}
   uvec::Array{Float64,1}
   hard_thresh::Float64 # Cut-off for each major iteration
+  max_iterations::Int64 # maximum outer iterations
 end
 
 function QuadraticPenaltyData(p, lambda, inner_mult, theta0,
                              tol, inner_tol, relaxation, beta, eps,
-                             print_stats, hard_thresh,
+                             print_stats, hard_thresh, max_iterations
                             )
   return QuadraticPenaltyData(
                               # For quic
@@ -1264,6 +1265,7 @@ function QuadraticPenaltyData(p, lambda, inner_mult, theta0,
                               zeros(p, p), # diff
                               zeros(p), # uvec
                               hard_thresh,
+                              max_iterations,
                              )
 end
 
@@ -1278,7 +1280,8 @@ function QuadraticPenaltyData(p)
                               0.9, # beta
                               0.01, # eps
                               false, # print_stats
-                              1e-12, # hard_thresh
+                              1e-10, # hard_thresh
+                              20, # max_iterations
                              )
 end
 
@@ -1352,6 +1355,7 @@ function quic(emp_data,
 
   descent_step = false
   inner_iterations = 0
+  outer_it_counter = 0
 
   # Calculate inverse
   LAPACK.potri!('U', data.W)
@@ -1364,7 +1368,7 @@ function quic(emp_data,
   BLAS.axpy!(1.0, data.Wt, data.W)
 
   # Outer loop to do a Newton step
-  while ~converged_outer
+  while ~converged_outer && outer_it_counter <= data.max_iterations
     if print_stats
       println("Outer iteration ", counter)
     end
@@ -1627,6 +1631,10 @@ function quic(emp_data,
     #= W += Wt =#
     BLAS.axpy!(1.0, data.Wt, data.W)
     #= W += triu(W, 1)' =#
+    outer_it_counter += 1
+    if outer_it_counter > data.max_iterations
+      println("Warning: maximum iteration count for QUIC reached, stopping.")
+    end
   end
 
   if length(g) > 0
