@@ -27,8 +27,8 @@ module CausalMLTest
   # Optional
 	using Calculus
   using LightGraphs
-  using Convex
-  using SCS
+  #= using Convex =#
+  #= using SCS =#
   #= using JLD =#
 
 	experiment_type = "binary"

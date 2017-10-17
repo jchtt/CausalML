@@ -16,8 +16,8 @@ using Calculus
 #= using JLD =#
 using Lasso
 using LightGraphs
-using Convex
-using SCS
+#= using Convex =#
+#= using SCS =#
 
 first_pass = true
 admm_path = []
