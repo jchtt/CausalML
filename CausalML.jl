@@ -16,6 +16,8 @@ using Calculus
 #= using JLD =#
 using Lasso
 using LightGraphs
+using Convex
+using SCS
 
 first_pass = true
 admm_path = []
@@ -1125,7 +1127,7 @@ function quic_old(p::Int64,
       D_diff = vecnorm(D - D_old)
       #= println("Inner difference: ", diff) =#
       if D_diff < inner_tol
-        inner_converged = true
+        #= inner_converged = true =#
         println("Inner converged, |D| = ", vecnorm(D), ", comparison = ", comparison)
       end
       r += 1
@@ -1208,6 +1210,8 @@ type QuadraticPenaltyData
   lambda::Float64 # penalty parameter
   inner_mult::Float64 # how often to run the inner loop compared
                       # to the outer loop iteration
+  inner_min_iterations::Int64 # How many iterations to start with
+  inner_max_iterations::Int64 # How many iterations to do at most in the inner loop
   theta0::Array{Float64,2} # Starting value
   tol::Float64 # Outer iteration tolerance
   inner_tol::Float64 # Inner iteration tolerance
@@ -1225,6 +1229,7 @@ type QuadraticPenaltyData
   D::Array{Float64,2}
   D_old::Array{Float64,2}
   U::Array{Float64,2}
+  Ut::Array{Float64,2}
   G::Array{Float64,2}
   Gmin::Array{Float64,2}
   theta_new::Array{Float64,2}
@@ -1234,7 +1239,8 @@ type QuadraticPenaltyData
   max_iterations::Int64 # maximum outer iterations
 end
 
-function QuadraticPenaltyData(p, lambda, inner_mult, theta0,
+function QuadraticPenaltyData(p, lambda, inner_mult, inner_min_iterations, inner_max_iterations,
+                              theta0,
                              tol, inner_tol, relaxation, beta, eps,
                              print_stats, hard_thresh, max_iterations
                             )
@@ -1242,6 +1248,8 @@ function QuadraticPenaltyData(p, lambda, inner_mult, theta0,
                               # For quic
                               lambda,
                               inner_mult,
+                              inner_min_iterations,
+                              inner_max_iterations,
                               theta0,
                               tol,
                               inner_tol,
@@ -1259,6 +1267,7 @@ function QuadraticPenaltyData(p, lambda, inner_mult, theta0,
                               zeros(p, p), # D
                               zeros(p, p), # D_old
                               zeros(p, p), # U
+                              zeros(p, p), # Ut
                               zeros(p, p), # G
                               zeros(p, p), # Gmin
                               zeros(p, p), # theta_new
@@ -1272,7 +1281,9 @@ end
 function QuadraticPenaltyData(p)
   return QuadraticPenaltyData(p,
                               1e-3, # lambda
-                              1/3, # inner_milt
+                              1/3, # inner_mult
+                              2, # inner_min_iterations
+                              1000, # inner_max_iterations
                               eye(p), # theta0
                               1e-4, # tol
                               1e-8, # inner_tol
@@ -1284,6 +1295,56 @@ function QuadraticPenaltyData(p)
                               50, # max_iterations
                              )
 end
+
+function quic_cg(theta0, # base matrix
+                 G, # gradient
+                 Z, # orthant indicator
+                 lambda,
+                 rho; # regularization parameter
+                 k_max = 10,
+                 tol = 1e-8
+                )
+
+  p = size(theta0, 1)
+  inactive_inds = (theta0 .!= 0) & (abs.(G) .<= lambda)
+  W = inv(theta0)
+  symmetrize!(W)
+  theta = zeros(p, p)
+  theta_vec = reshape(theta, p^2) 
+  R = -(G + lambda * Z)
+  R[inactive_inds] = 0
+  k = 0
+  r = reshape(R, p^2)
+  q = copy(r)
+
+  while k <= min(k_max, p^2) && vecnorm(r) > tol
+    Q = reshape(q, p, p)
+    Y = W * Q * W + rho * Q
+    Y[inactive_inds] = 0
+    y = reshape(Y, p^2)
+    alpha = sum(r.^2)/sum(q .* y)
+    theta_vec += alpha * q
+    r_new = r - alpha * y
+    beta = sum(r_new.^2)/sum(r.^2)
+    r = r_new
+    q = r + beta * q
+    k += 1
+  end
+
+  return reshape(theta_vec, p, p)
+end
+
+#= function quic_fista(theta, =#
+#=                     c # regularization =#
+#=                    ) =#
+#=   t_old = 1 =#
+#=   t = (1 + sqrt(1 + 4 t^2))/2 =#
+#=   theta_old = copy(theta) =#
+#=   theta_hat = theta + (t-1)/ =#
+#=   for t = 1:t_max =#
+#=     soft_thresh.(theta_hat - G/c - W * (theta_hat - theta) * W/c - rho * ones(p, p) / c, lambda/c) =#
+#=   end =#
+#= end =#
 
 function quic(emp_data,
                quic_data,
@@ -1305,6 +1366,8 @@ function quic(emp_data,
   data = quic_data
   lambda = data.lambda
   inner_mult = data.inner_mult
+  inner_min_iterations = data.inner_min_iterations
+  inner_max_iterations = data.inner_max_iterations
   theta0 = data.theta0
   tol = data.tol
   inner_tol = data.inner_tol
@@ -1312,12 +1375,19 @@ function quic(emp_data,
   beta = data.beta
   eps = data.eps
   print_stats = data.print_stats
+  status = 0
+
 
   (p1, p2) = size(sigma)
   if p1 != p2
     throw(ArgumentError("sigma needs to be a square matrix"))
   end
   p = p1
+
+  diag_idx = diagm(trues(p,1))
+  offdiag_idx = ~diag_idx
+  find_offdiag_idx = find(~diag_idx)
+
   converged_outer = false
   counter = 1
   alpha = 1.0
@@ -1327,6 +1397,9 @@ function quic(emp_data,
   #= theta = copy(theta0) =#
   copy!(data.theta, theta0)
   symmetrize!(data.theta)
+  #= println("Theta0 = ", theta0) =#
+  #= println("sigma = ", sigma) =#
+  #= println("theta_prime = ", theta_prime) =#
   #= transpose!(data.thetaT, data.theta) =#
   #= BLAS.axpy!(1.0, data.thetaT, data.theta) =#
   #= scale!(0.5, data.theta) =#
@@ -1351,11 +1424,11 @@ function quic(emp_data,
   copy!(data.diff, data.theta)
   BLAS.axpy!(-1.0, data.theta_prime, data.diff)
   #= f_old = sum((data.theta) .* sigma) - sum(2*log(diag(data.W))) + rho/2 * vecnorm(data.theta - data.theta_prime)^2 + lambda * vecnorm(data.theta, 1) =#
-  f_old = BLAS.dot(p^2, data.theta, 1, sigma, 1) - sum(2*log(diag(data.W))) + rho/2 * vecnorm(data.diff)^2 + lambda * vecnorm(data.theta, 1)
+  #= f_old = BLAS.dot(p^2, data.theta, 1, sigma, 1) - sum(2*log(diag(data.W))) + rho/2 * vecnorm(data.diff)^2 + lambda * vecnorm(data.theta, 1) =#
+  f_old = BLAS.dot(p^2, data.theta, 1, sigma, 1) - sum(2*log(diag(data.W))) + rho/2 * vecnorm(data.diff)^2 + lambda * vecnorm(data.theta[offdiag_idx], 1)
 
   descent_step = false
   inner_iterations = 0
-  outer_it_counter = 0
 
   # Calculate inverse
   LAPACK.potri!('U', data.W)
@@ -1368,9 +1441,10 @@ function quic(emp_data,
   BLAS.axpy!(1.0, data.Wt, data.W)
 
   # Outer loop to do a Newton step
-  while ~converged_outer && outer_it_counter <= data.max_iterations
+  while ~converged_outer && counter <= data.max_iterations
     if print_stats
-      println("Outer iteration ", counter)
+      println("Outer iteration: ", counter)
+      println("cond(theta) = ", cond(data.theta))
     end
     #= D[:] = 0.0 =#
     fill!(data.D, 0.0)
@@ -1388,7 +1462,9 @@ function quic(emp_data,
     BLAS.axpy!(-1.0, data.W, data.G)
     BLAS.axpy!(rho, data.diff, data.G)
 
-    S = findn(triu((abs(data.G) .>= lambda - eps) | (data.theta .!= 0)))
+    #= S = findn(triu((abs(data.G) .>= lambda - eps) | (data.theta .!= 0))) =#
+    S = findn(triu(trues(p, p)))
+    #= println(triu((abs(data.G) .>= lambda - eps) | (data.theta .!= 0))) =#
 
     # Minimum norm subgradient
     @simd for I in eachindex(data.Gmin)
@@ -1412,14 +1488,24 @@ function quic(emp_data,
     # Inner loop to compute Newton direction
     r = 1
     descent_step = false
-    inner_iterations = floor(Int64, 1 + counter * inner_mult)
+    inner_iterations = floor(Int64, inner_min_iterations + counter * inner_mult)
     inner_converged = false
-    while r <= inner_iterations && ~inner_converged #|| ~descent_step
+    #= while r <= inner_iterations && ~inner_converged #|| ~descent_step =#
+    #= active_inds = shuffle(collect(zip(S...))) =#
+    active_inds = zip(S...)
+
+    #= # DEBUG START =#
+    #= println("W accuracy: ", vecnorm(eye(p) - data.W * data.theta)) =#
+    #= # DEBUG END =#
+
+    #= while r <= inner_max_iterations && (r <= inner_iterations || ~inner_converged) #|| ~descent_step =#
+    #= while ~inner_converged #|| ~descent_step =#
+    while r <= inner_max_iterations && ~inner_converged #|| ~descent_step
     #= while r <= 100 =#
       #= if mod(r, 1) == 0 =#
-        if print_stats
-          println("Inner iteration ", r)
-        end
+        #= if print_stats =#
+        #=   println("Inner iteration ", r) =#
+        #= end =#
 
         copy!(data.D_old, data.D)
         #= D_old[:] = D[:] =#
@@ -1433,7 +1519,8 @@ function quic(emp_data,
       #= G[:] = sigma - W =#
       # Determine active indices
 
-      for (i, j) in zip(S...)
+      #= for (i, j) in zip(S...) =#
+      for (i, j) in active_inds
         a = data.W[i,j]^2
         a += rho
         if i != j
@@ -1443,61 +1530,90 @@ function quic(emp_data,
         @simd for k = 1:p
           @inbounds b += data.W[k,i] * data.U[j,k]
         end
+        #= b += sum(data.W[:,i] .* data.U[j, :]) =#
+
+        #= if i == 1 && j == 1 =#
+        #=   println(b) =#
+        #= end =#
         #= b += sum(W[:,i] .* U[j,:]) =#
         #= copy!(data.uvec, view(data.U, j, :)) =#
         #= b += BLAS.dot(view(data.W, :, i), data.uvec) =#
         b += sigma[i,j]
         b -= data.W[i,j]
+        #= b -= data.W[j,i] =#
+        #= if i == 1 && j == 1 =#
+        #=   println(b) =#
+        #= end =#
         b += rho * (data.theta[i,j] + data.D[i,j] - data.theta_prime[i,j])
+        #= if i == 1 && j == 1 =#
+        #=   println(b) =#
+        #= end =#
         c = data.theta[i,j] + data.D[i,j]
 
         #= # DEBUG start =#
-        #= mu = 1 =#
-        #= f0 = sum((sigma - data.W).*data.D) + 0.5*trace(data.W*data.D*data.W*data.D) + rho/2*vecnorm(data.theta + data.D - data.theta_prime)^2 =#
-        #= data.D[i,j] += mu =#
-        #= if i != j =#
-        #=   data.D[j,i] += mu =#
-        #= end =#
-        #= f_plus = sum((sigma - data.W).*data.D) + 0.5*trace(data.W*data.D*data.W*data.D) + rho/2*vecnorm(data.theta + data.D - data.theta_prime)^2 =#
-        #= data.D[i,j] -= 2*mu =#
-        #= if i != j =#
-        #=   data.D[j,i] -= 2*mu =#
-        #= end =#
-        #= f_min = sum((sigma - data.W).*data.D) + 0.5*trace(data.W*data.D*data.W*data.D) + rho/2*vecnorm(data.theta + data.D - data.theta_prime)^2 =#
-        #= #1= c_ideal = f0 =1# =#
-        #= b_ideal = (f_plus - f_min)/(2*mu) =#
-        #= a_ideal = 2*(f_plus - mu*b_ideal - f0)/(mu^2) =#
-        #= if i != j =#
-        #=   b_ideal /= 2 =#
-        #=   a_ideal /= 2 =#
-        #= end =#
-        #= #1= if i == j =1# =#
-        #= if counter == 1 =#
-        #=   println("-------------------------------------------") =#
-        #=   println("Theory: a = ", a_ideal, ", b = ", b_ideal) =#
-        #=   println("Practice: a = ", a, ", b = ", b) =#
-        #= end =#
-        #= #1= end =1# =#
-        #= data.D[i,j] += mu =#
-        #= if i != j =#
-        #=   data.D[j,i] += mu =#
+        #= if i == 1 =#
+        #=   mu = 1 =#
+        #=   f0 = sum((sigma - data.W).*data.D) + 0.5*trace(data.W*data.D*data.W*data.D) + rho/2*vecnorm(data.theta + data.D - data.theta_prime)^2 =#
+        #=   data.D[i,j] += mu =#
+        #=   if i != j =#
+        #=     data.D[j,i] += mu =#
+        #=   end =#
+        #=   f_plus = sum((sigma - data.W).*data.D) + 0.5*trace(data.W*data.D*data.W*data.D) + rho/2*vecnorm(data.theta + data.D - data.theta_prime)^2 =#
+        #=   data.D[i,j] -= 2*mu =#
+        #=   if i != j =#
+        #=     data.D[j,i] -= 2*mu =#
+        #=   end =#
+        #=   f_min = sum((sigma - data.W).*data.D) + 0.5*trace(data.W*data.D*data.W*data.D) + rho/2*vecnorm(data.theta + data.D - data.theta_prime)^2 =#
+        #=   #1= c_ideal = f0 =1# =#
+        #=   b_ideal = (f_plus - f_min)/(2*mu) =#
+        #=   a_ideal = 2*(f_plus - mu*b_ideal - f0)/(mu^2) =#
+        #=   if i != j =#
+        #=     b_ideal /= 2 =#
+        #=     a_ideal /= 2 =#
+        #=   end =#
+        #=   #1= if i == j =1# =#
+        #=     if counter == 1 =#
+        #=       println("-------------------------------------------") =#
+        #=       println("Theory: a = ", a_ideal, ", b = ", b_ideal) =#
+        #=       println("Practice: a = ", a, ", b = ", b) =#
+        #=     end =#
+        #=   #1= end =1# =#
+        #=   data.D[i,j] += mu =#
+        #=   if i != j =#
+        #=     data.D[j,i] += mu =#
+        #=   end =#
         #= end =#
         #= # DEBUG end =#
 
-        mu = -c + soft_thresh(c - b/a, lambda/a)
+        #= if i == j =#
+        #=   mu = -b/a =#
+        #= else =#
+          mu = -c + soft_thresh(c - b/a, lambda/a)
+        #= end =#
+
+        #= if i == p && j == p =#
+        #=   println("j = ", j, ", ", "a = ", a, ", b = ", b, ", c = ", c, ", b/a = ", b/a) =#
+        #=   println("sigma diff: ", sigma[i, j] - data.W[i, j], ", rho diff: ", rho * (data.theta[i,j] + data.D[i,j] - data.theta_prime[i,j]), ", quadratic: ", sum(data.W[:,i] .* data.U[j, :]), ", quadratic leading: ", data.W[j, i] * data.U[j, i] =#
+        #=          ) =#
+        #= #1=   println(soft_thresh(c - b/a, lambda/a)) =1# =#
+        #= #1=   println(mu) =1# =#
+        #= #1= #2=   println(data.D[i,j]) =2# =1# =#
+        #= #1= #2=   println(data.D[i,j] + mu) =2# =1# =#
+        #= end =#
+
         if mu != 0.0
           data.D[i,j] += mu
           if i != j
             data.D[j,i] += mu
           end
-          #= U[:,i] += mu * W[:,j] =#
+          #= data.U[:,i] += mu * data.W[:,j] =#
           @simd for k = 1:p
             @inbounds data.U[k,i] += mu * data.W[k,j]
           end
           #= BLAS.axpy!(mu, view(data.W, :, j), view(data.U, :, i)) =#
           #= BLAS.axpy!(mu, data.W[:, j], data.U[:,i]) =#
           if i != j
-            #= @inbounds U[:,j] += mu * W[:,i] =#
+            #= data.U[:,j] += mu * data.W[:,i] =#
             @simd for k = 1:p
               @inbounds data.U[k,j] += mu * data.W[k,i]
             end
@@ -1506,6 +1622,7 @@ function quic(emp_data,
         end
       end
       #= l1_new = vecnorm(data.theta + data.D, 1) =#
+
       copy!(data.diff, data.theta)
       BLAS.axpy!(1.0, data.D, data.diff)
       l1_new = vecnorm(data.diff, 1)
@@ -1514,22 +1631,73 @@ function quic(emp_data,
       #= comparison += sum(data.G .* data.D) =#
       comparison += BLAS.dot(p^2, data.G, 1, data.D, 1)
       comparison *= relaxation
-      #= comparison = relaxation * (sum(G .* D) + lambda * (vecnorm(theta + D, 1) - vecnorm(theta, 1))) =#
+
+      #= data.diff = data.theta + data.D =#
+      comparison = relaxation * (sum(data.G .* data.D) + lambda * (vecnorm(data.diff[offdiag_idx], 1) - vecnorm(data.theta[offdiag_idx], 1)))
+      #= comparison = relaxation * (sum(data.G .* data.D) + lambda * (vecnorm(data.theta + data.D, 1) - vecnorm(data.theta, 1))) =#
       descent_step = comparison < 0
-      if print_stats
-        println("descent = ", descent_step)
-      end
+      #= if print_stats =#
+      #=   println("descent = ", descent_step) =#
+      #= end =#
       #= diff = vecnorm(data.D - data.D_old) =#
       copy!(data.diff, data.D)
       BLAS.axpy!(-1.0, data.D_old, data.diff)
-      diff = vecnorm(data.diff)
-      #= println("Inner difference: ", diff) =#
+      cur_norm = vecnorm(data.D)
+      diff = vecnorm(data.diff)/max(cur_norm, 1e-4)
+      #= println("Inner difference: ", diff, ", ", vecnorm(data.diff)) =#
       if diff < inner_tol
         inner_converged = true
-        #= println("Inner converged, |D| = ", vecnorm(data.D), ", comparison = ", comparison) =#
+        #= if print_stats =#
+        #=   println("Inner converged, |D| = ", vecnorm(data.D), ", comparison = ", comparison) =#
+        #= end =#
       end
       r += 1
     end
+
+    #= # DEBUG START =#
+    #= # Compute cg solution =#
+    #= Z = zeros(p, p) =#
+    #= Z[data.theta .> 0] = 1 =#
+    #= Z[data.theta .< 0] = -1 =#
+    #= Z[(data.theta .== 0) & (data.G .> lambda)] = -1 =#
+    #= Z[(data.theta .== 0) & (data.G .< lambda)] = 1 =#
+    #= Z[(data.theta .== 0) & (abs(data.G) .<= lambda)] = -data.G[abs(data.G) .<= lambda]/lambda =#
+    #= actives = findn((data.theta .== 0) & (abs(data.G) .<= lambda)) =#
+    #= inactives = findn((data.theta .!= 0) | (abs(data.G) .> lambda)) =#
+
+    #= D_cg = quic_cg(data.theta, data.G, Z, lambda, rho) =#
+    #= proj_step = data.theta + D_cg =#
+    #= proj_step[sign(proj_step) .!= sign(Z)] = 0 =#
+
+    #= # Compare to solution found by convex solver =#
+    #= println("Inner iterations: ", r) =#
+    #= Dvar = Variable(p, p) =#
+    #= theta_inv = inv(data.theta) =#
+    #= symmetrize!(theta_inv) =#
+    #= theta_inv_sqrt = sqrtm(theta_inv) =#
+    #= symmetrize!(theta_inv_sqrt) =#
+    #= problem = minimize(sum((sigma - theta_inv) .* Dvar) + 0.5*vecnorm(theta_inv_sqrt * Dvar * theta_inv_sqrt)^2 + rho / 2 * vecnorm(data.theta + Dvar - theta_prime)^2 + lambda * vecnorm(data.theta + Dvar - diagm(diag(data.theta + Dvar)), 1)) =#
+    #= #1= problem = minimize(sum((sigma - theta_inv) .* Dvar) + rho / 2 * vecnorm(data.theta + Dvar - theta_prime)^2) =1# =#
+    #= solve!(problem, SCSSolver(verbose = false, max_iters = 10000)) =#
+    #= D_convex = Dvar.value =#
+    #= println("Comparison = ", vecnorm(data.D - D_convex), ", ", vecnorm(D_cg - D_convex)) =#
+    #= println("Relative: ", vecnorm(data.D - D_convex)/vecnorm(D_convex), ", ", vecnorm(D_cg - D_convex)/vecnorm(D_convex)) =#
+    #= println("First coordinates: ", D_convex[1,1], ", ", data.D[1,1]) =#
+    #= objective(Dvar) = sum((sigma - theta_inv) .* Dvar) + 0.5*trace(theta_inv * Dvar * theta_inv * Dvar) + rho / 2 * vecnorm(data.theta + Dvar - theta_prime)^2 + lambda * vecnorm(data.theta + Dvar, 1) =#
+    #= objective2(Dvar) = sum((sigma - theta_inv) .* Dvar) + 0.5*vecnorm(theta_inv_sqrt * Dvar * theta_inv_sqrt)^2 + rho / 2 * vecnorm(data.theta + Dvar - theta_prime)^2 + lambda * vecnorm(data.theta + Dvar, 1) =#
+    #= println("Objectives: ", objective(D_convex), ", ", objective(data.D)) =#
+    #= println("Objectives (2): ", objective2(D_convex), ", ", objective2(data.D)) =#
+    #= println("Min egis: ", eigmin(data.theta + D_convex), ", ", eigmin(data.theta + data.D), ", ", eigmin(proj_step)) =#
+    #= println("Convex result: ", data.theta + D_convex) =#
+    #= println("Iterative result: ", data.theta + data.D) =#
+    #= println("CG result: ", proj_step) =#
+    #= #1= if counter > 1 =1# =#
+    #=   #1= data.D = D_convex =1# =#
+    #= #1= end =1# =#
+    #= #1= println(data.D) =1# =#
+    #= #1= println(data.theta + data.D) =1# =#
+    #= println("Accuracy: ", vecnorm(data.U - data.W' * data.D)) =#
+    #= # DEBUG END =#
 
     #= global first_pass =#
     #= if first_pass && counter >= 2000 =#
@@ -1539,7 +1707,6 @@ function quic(emp_data,
     #=   println(S) =#
     #=   first_pass = false =#
     #= end =#
-
 
     # Sufficient decrease condition 
     #= if comparison > -search_relaxation * vecnorm(D)^exponent =#
@@ -1554,54 +1721,102 @@ function quic(emp_data,
     #=   comparison *= relaxation =#
     #= end =#
 
-    # Compute Armijo step size
-    alpha = 1.0
-    f_new = 0.0
-    while true
-      #= data.theta_new[:] = data.theta + alpha * data.D =#
-      copy!(data.theta_new, data.theta)
-      BLAS.axpy!(alpha, data.D, data.theta_new)
-      #= W[:] = copy(theta_new) =#
-      copy!(data.W, data.theta_new)
-      try
-        LAPACK.potrf!('U', data.W)
-        if any(diag(data.W) .<= 0.0)
-          throw(DomainError())
-        end
-      catch
-        alpha *= beta
-        continue
-      end
+    if print_stats
+      println("Inner iterations: ", r)
+    end
 
-      copy!(data.diff, data.theta_new)
-      BLAS.axpy!(-1.0, data.theta_prime, data.diff)
-      f_new = BLAS.dot(p^2, data.theta_new, 1, sigma, 1) - sum(2*log(diag(data.W))) + rho/2 * vecnorm(data.diff)^2 + lambda * vecnorm(data.theta_new, 1)
-      #= f_new = sum((data.theta_new) .* sigma) - sum(2*log(diag(data.W))) + rho/2*vecnorm(data.theta_new - data.theta_prime)^2 + lambda * vecnorm(data.theta_new, 1) =#
-      #= f_new = sum((theta_new) .* sigma) - logdet(theta_new) + rho/2*vecnorm(theta_new - theta_prime)^2 + lambda * vecnorm(theta_new, 1) =#
-      #= f_new = sum((theta_new) .* sigma) - logdet(theta_new) + vecnorm(theta_new, 1) =#
-      if f_new <= f_old + alpha * comparison
-        break
-      else
-        alpha *= beta
-        if print_stats
-          #= print("theta = ") =#
-          #= println(data.theta) =#
-          #= print("D = ") =#
-          #= println(data.D) =#
-          #= print("sigma = ") =#
-          #= println(sigma) =#
-          #= print("theta_prime = ") =#
-          #= println(theta_prime) =#
-          #= print("rho = ") =#
-          #= println(rho) =#
-          #= print("lambda = ") =#
-          #= println(lambda) =#
-          println("decrease alpha = ", alpha, ", f_new = ", f_new, ", f_old = ", f_old)
-        end
-        #= println("theta_new = ", theta_new) =#
-        #= println("theta = ", theta) =#
+    if r > inner_max_iterations
+      status = 1
+    end
+
+    # Compute self-concordant step size
+    #= eps_term = sqrt(trace(data.W * data.D * data.W * data.D) + rho * sum(data.D)^2) =#
+    #= eps_term = sqrt(trace(data.W * data.D * data.W * data.D)) =#
+    eps_term = 0.0
+    transpose!(data.Ut, data.U)
+    @simd for i = 1:p
+      @simd for j = 1:p
+        @inbounds eps_term += data.U[i, j] * data.Ut[i, j]
       end
     end
+    eps_term = sqrt(eps_term)
+
+    if eps_term > 3/40
+      tau = 1/(eps_term + 1)
+    else
+      tau = 1
+    end
+    data.theta_new = data.theta + tau * data.D
+    if print_stats
+      println("tau = ", tau)
+    end
+
+    copy!(data.W, data.theta_new)
+    LAPACK.potrf!('U', data.W)
+    f_new = BLAS.dot(p^2, data.theta_new, 1, sigma, 1) - logdet(data.theta_new) + rho/2 * vecnorm(data.diff)^2 + lambda * vecnorm(data.theta_new, 1)
+
+#=     # COMMENT START =#
+#=     # Compute Armijo step size =#
+#=     alpha = 1.0 =#
+#=     f_new = 0.0 =#
+#=     while true =#
+#=       #1= data.theta_new[:] = data.theta + alpha * data.D =1# =#
+#=       copy!(data.theta_new, data.theta) =#
+#=       BLAS.axpy!(alpha, data.D, data.theta_new) =#
+#=       #1= W[:] = copy(theta_new) =1# =#
+#=       copy!(data.W, data.theta_new) =#
+#=       try =#
+#=         LAPACK.potrf!('U', data.W) =#
+#=         if any(diag(data.W) .<= 0.0) =#
+#=           throw(DomainError()) =#
+#=         end =#
+#=       catch =#
+#=         #1= alpha *= beta =1# =#
+#=         #1= if print_stats =1# =#
+#=         #1=   println("Warning, not psd!, ", minimum(diag(data.W))) =1# =# 
+#=         #1= end =1# =#
+#=         #1= continue =1# =#
+#=       end =#
+#=       min_eig = eigmin(data.theta_new) =#
+#=       if min_eig < 1e-1 =#
+#=         #1= println("Min eig: ", min_eig) =1# =#
+#=         alpha *= beta =#
+#=         continue =#
+#=       end =#
+
+#=       copy!(data.diff, data.theta_new) =#
+#=       BLAS.axpy!(-1.0, data.theta_prime, data.diff) =#
+#=       f_new = BLAS.dot(p^2, data.theta_new, 1, sigma, 1) - logdet(data.theta_new) + rho/2 * vecnorm(data.diff)^2 + lambda * vecnorm(data.theta_new[offdiag_idx], 1) =#
+#=       #1= f_new = BLAS.dot(p^2, data.theta_new, 1, sigma, 1) - logdet(data.theta_new) + rho/2 * vecnorm(data.diff)^2 + lambda * vecnorm(data.theta_new, 1) =1# =#
+#=       #1= f_new = BLAS.dot(p^2, data.theta_new, 1, sigma, 1) - sum(2*log(diag(data.W))) + rho/2 * vecnorm(data.diff)^2 + lambda * vecnorm(data.theta_new, 1) =1# =#
+#=       #1= f_new = sum((data.theta_new) .* sigma) - sum(2*log(diag(data.W))) + rho/2*vecnorm(data.theta_new - data.theta_prime)^2 + lambda * vecnorm(data.theta_new, 1) =1# =#
+#=       #1= f_new = sum((theta_new) .* sigma) - logdet(theta_new) + rho/2*vecnorm(theta_new - theta_prime)^2 + lambda * vecnorm(theta_new, 1) =1# =#
+#=       #1= f_new = sum((theta_new) .* sigma) - logdet(theta_new) + vecnorm(theta_new, 1) =1# =#
+#=       if f_new <= f_old + alpha * comparison =#
+#=         break =#
+#=       else =#
+#=         alpha *= beta =#
+#=         if print_stats =#
+#=           #1= print("theta = ") =1# =#
+#=           #1= println(data.theta) =1# =#
+#=           #1= print("D = ") =1# =#
+#=           #1= println(data.D) =1# =#
+#=           #1= print("sigma = ") =1# =#
+#=           #1= println(sigma) =1# =#
+#=           #1= print("theta_prime = ") =1# =#
+#=           #1= println(theta_prime) =1# =#
+#=           #1= print("rho = ") =1# =#
+#=           #1= println(rho) =1# =#
+#=           #1= print("lambda = ") =1# =#
+#=           #1= println(lambda) =1# =#
+#=           println("decrease alpha = ", alpha, ", f_new = ", f_new, ", f_old = ", f_old) =#
+#=         end =#
+#=         #1= println("theta_new = ", theta_new) =1# =#
+#=         #1= println("theta = ", theta) =1# =#
+#=       end =#
+#=     end =#
+#=     # COMMENT END =#
+
     if print_stats
       println("alpha = ", alpha)
     end
@@ -1609,7 +1824,6 @@ function quic(emp_data,
     #= if vecnorm(theta_new - theta) < tol =#
     #=   converged_outer = true =#
     #= else =#
-      counter += 1
     #= end =#
 
     f_old = copy(f_new)
@@ -1631,8 +1845,9 @@ function quic(emp_data,
     #= W += Wt =#
     BLAS.axpy!(1.0, data.Wt, data.W)
     #= W += triu(W, 1)' =#
-    outer_it_counter += 1
-    if outer_it_counter > data.max_iterations
+    #= outer_it_counter += 1 =#
+    counter += 1
+    if counter > data.max_iterations
       println("Warning: maximum iteration count for QUIC reached, stopping.")
     end
   end
@@ -1642,7 +1857,7 @@ function quic(emp_data,
     copy!(g, data.G)
   end
 
-  return data.theta
+  return (data.theta, status)
 end
 
 # First version
@@ -1874,7 +2089,7 @@ function min_admm_old(emp_data, admm_data, lambda, B0, rho)
     #= println("Running quic for ", e) =#
     vec2mat(vars[end], emp_data, inplace = B)
     theta_prime[:] = (I - Us[e]*B)'*(I - Us[e]*B) - duals[e]/rho
-    theta = quic(emp_data, qu_data, sigmas[e],
+    theta,_ = quic(emp_data, qu_data, sigmas[e],
                   theta_prime = theta_prime, rho = rho, lambda = lambda,
                   theta0 = vars[e], tol = 1e-2, inner_tol = 1e-6)
     copy!(vars[e], theta)
@@ -1964,8 +2179,10 @@ function admm(emp_data, admm_data, solvers, dual_update, vars0; compute_bmap = [
   duals = admm_data.duals
   T = admm_data.T
   eps_cor = admm_data.eps_cor
+  status = 0
 
   converged = false
+  balanced = false
   vars = deepcopy(vars0)
   vars_old = deepcopy(vars0)
   # Init duals
@@ -2006,7 +2223,8 @@ function admm(emp_data, admm_data, solvers, dual_update, vars0; compute_bmap = [
   println("tol_primal_abs = ", sqrt(dim_primal) * tol_abs, ", tol_dual_abs = ", sqrt(dim_dual) * tol_abs)
 
   push!(admm_path, [])
-  while ~converged
+  r = 1
+  while ~converged && r <= admm_data.max_iterations
     #= status = Dict() =#
     # Minimization steps
     for s! in solvers
@@ -2122,14 +2340,15 @@ function admm(emp_data, admm_data, solvers, dual_update, vars0; compute_bmap = [
     end
 
     # Residual balancing
-    balanced = false
     if dual_balancing
       if res_norm > mu * dual_res_norm
         rho *= tau
         balanced = true
+        bal_counter = 1
       elseif dual_res_norm > mu * res_norm
         rho /= tau
         balanced = true
+        bal_counter = 1
       end
     end
 
@@ -2138,6 +2357,13 @@ function admm(emp_data, admm_data, solvers, dual_update, vars0; compute_bmap = [
       if res_norm > res_norm_old && !balanced
         rho *= 1.5
       end
+    end
+
+    if balanced
+      if bal_counter >= 3
+        balanced = false
+      end
+      bal_counter += 1
     end
 
     res_norm_old = copy(res_norm)
@@ -2155,10 +2381,16 @@ function admm(emp_data, admm_data, solvers, dual_update, vars0; compute_bmap = [
     #= end =#
 
     println("rho = ", rho)
+    #= println("B = ", vars[end]) =#
     vars_old = deepcopy(vars)
+    r += 1
   end
 
-  return vars
+  if r > admm_data.max_iterations
+    status = 1
+  end
+
+  return (vars, status)
 end
 
 type ConstraintData
@@ -2316,6 +2548,7 @@ type ADMMData
   duals::Array{Array{Float64,2},1}
   T::Int64 # How often to run BB update
   eps_cor::Float64 # Safeguarding threshold for BB update
+  max_iterations::Int64 # maximum number of iterations
 end
 
 function ADMMData(emp_data, constr_data, lambda)
@@ -2338,6 +2571,7 @@ function ADMMData(emp_data, constr_data, lambda)
                   [zeros(emp_data.p, emp_data.p) for e = 1:emp_data.E], # duals
                   3, # T
                   0.2, # eps_cor
+                  2000, # max_iterations
                  )
   data.quic_data.lambda = lambda
   return data
@@ -2428,13 +2662,21 @@ function min_admm(emp_data, admm_data)
     copy!(theta_prime, admm_data.Ainv2s[e])
     BLAS.axpy!(-1/rho, duals[e], theta_prime)
     #= println("dual = ", duals[e]) =#
+
+    # DEBUG START
     qu_data.theta0 = copy(vars[e])
+    #= qu_data.theta0 = eye(p) =#
+    # DEBUG END
+
     #= println("Theta_prime symmetric: ", vecnorm(theta_prime - theta_prime')) =#
     #= theta_prime2 = (I - Us[e]*B)'*(I - Us[e]*B) - duals[e]/rho =#
     #= println("Prime diff: ", vecnorm(theta_prime - theta_prime2)) =#
     #= var_old = copy(vars[e]) =#
+    #= println(theta_prime) =#
+    #= println(rho) =#
+    #= println(qu_data) =#
     copy!(vars[e], quic(emp_data, qu_data, sigmas[e],
-                        theta_prime = theta_prime, rho = rho))
+                        theta_prime = theta_prime, rho = rho)[1])
     #= println("Diff: ", vecnorm(var_old - vars[e])) =#
     #= copy!(vars[e], theta) =#
   end
@@ -2505,7 +2747,7 @@ function min_admm(emp_data, admm_data)
   chol = zeros(p, p)
   chol2 = zeros(p, p)
   for e = 1:E
-    if emp_data.n > 2 * p
+    if true && emp_data.n > 2 * p
       # Inverses
       copy!(chol, sigmas_emp[e])
       LAPACK.potrf!('U', chol)
@@ -2530,27 +2772,30 @@ function min_admm(emp_data, admm_data)
 
   push!(solvers, solve_constr!)
 
-  vars_result = admm(emp_data, admm_data, solvers, dual_update, vars, compute_bmap = compute_bmap)
+  (vars_result, status) = admm(emp_data, admm_data, solvers, dual_update, vars, compute_bmap = compute_bmap)
   B_admm = vec2mat(vars_result[end], emp_data)
   #= println(vecnorm(vars_result[end] - mat2vec(B))) =#
-  return B_admm
+  return (B_admm, status)
 end
 
 function min_admm_oracle(pop_data, emp_data, admm_data, lambdas)
   errors = zeros(length(lambdas))
   Bs = []
   B_admm = copy(admm_data.B0)
+  status = zeros(length(lambdas))
   for i = 1:length(lambdas)
     println("lambda = ", lambdas[i])
     admm_data.B0 = copy(B_admm)
     admm_data.quic_data.lambda = lambdas[i]
-    B_admm = copy(min_admm(emp_data, admm_data))
+    result = min_admm(emp_data, admm_data)
+    B_admm = copy(result[1])
+    status[i] = result[2]
     push!(Bs, B_admm)
     errors[i] = vecnorm(B_admm - pop_data.B)
   end
 
   (err, ind) = findmin(errors)
-  return (Bs[ind], err, lambdas[ind], errors)
+  return (Bs[ind], err, lambdas[ind], errors, status)
 end
 
 function min_constr_lh_oracle(pop_data, emp_data, lh_data, lambdas)
@@ -2576,12 +2821,12 @@ function min_constr_lh_oracle(pop_data, emp_data, lh_data, lambdas)
 end
 
 function combined_oracle(pop_data, emp_data, admm_data, lh_data, lambdas)
-  (B1, err1, lambda1, errors1) = min_admm_oracle(pop_data, emp_data, admm_data, lambdas)
+  (B1, err1, lambda1, errors1, status1) = min_admm_oracle(pop_data, emp_data, admm_data, lambdas)
   lh_data.x_base = mat2vec(B1, emp_data)
   lh_data.upper_bound = vecnorm(pop_data.B - B1)^2
   lh_data.B0 = copy(B1)
   (B2, err2, lambda2, errors2) = min_constr_lh_oracle(pop_data, emp_data, lh_data, lambdas) 
-  return (B1, B2, err1, err2, lambda1, lambda2, errors1, errors2)
+  return (B1, B2, err1, err2, lambda1, lambda2, errors1, errors2, status1)
 end
 
 function min_admm_cv(pop_data, emp_data, admm_data, lambdas, k)
@@ -2606,7 +2851,7 @@ function min_admm_cv(pop_data, emp_data, admm_data, lambdas, k)
     for j = 1:k
       admm_data.B0 = copy(B_admms[j])
       admm_data.quic_data.lambda = lambdas[i]
-      B_admms[j] = copy(min_admm(emp_datas_train[j], admm_data))
+      B_admms[j] = copy(min_admm(emp_datas_train[j], admm_data)[1])
       println(size(B_admms[j]))
       lh_val += lh(emp_datas_test[j], lh_data, mat2vec(B_admms[j], emp_data, reduced = true), [])
     end
@@ -2616,7 +2861,7 @@ function min_admm_cv(pop_data, emp_data, admm_data, lambdas, k)
   (lh_val, ind) = findmin(lhs)
   admm_data.B0 = B0_old
   admm_data.quic_data.lambda = lambdas[ind]
-  B = min_admm(emp_data, admm_data)
+  B = min_admm(emp_data, admm_data)[1]
   return (B, lh_val, lambdas[ind], lhs)
 end
 

@@ -27,14 +27,14 @@ module CausalMLTest
   # Optional
 	using Calculus
   using LightGraphs
-  #= using Convex =#
-  #= using SCS =#
+  using Convex
+  using SCS
   #= using JLD =#
 
-	experiment_type = "single"
-	const p = 100
-	const d = 10
-	matrix_std = 0.8
+	experiment_type = "binary"
+	const p = 10
+	const d = 2
+	matrix_std = 3
 	lambda = 1e-1
 	n = Int32(1e4)
 
@@ -46,8 +46,8 @@ module CausalMLTest
 	# Generate data
   function gen_data()
     println("Generating data")
-    pop_data = PopulationData(p, d, matrix_std, experiment_type)
-    emp_data = EmpiricalData(pop_data, n)
+    global pop_data = PopulationData(p, d, matrix_std, experiment_type)
+    global emp_data = EmpiricalData(pop_data, n)
   end
 
 	#= if "lbfgsb_test" in run_ops =#
@@ -176,29 +176,50 @@ module CausalMLTest
 	#= end =#
 
 	function quic_test()
+    gen_data()
     data = QuadraticPenaltyData(p)
-    lambda = 1e0
-    rho = 1.0
-    global theta_prime = randn(p, p)
-    theta_prime = theta_prime' * theta_prime
+    lambda = 1e-2
+    rho = 0.0
+    #= B0 = 10*triu(randn(p, p), 1) =#
+    B0 = zeros(p, p)
+    U = emp_data.Us[2]
+    global theta_prime = (I - U * B0)' * (I - U * B0)
+    #= theta_prime = zeros(p,p) =#
     data.lambda = lambda
     data.print_stats = true
+    data.inner_mult = 1/3
+    data.inner_min_iterations = 5
+    data.inner_tol = 1e-6
+    data.max_iterations = 10000
+    data.inner_max_iterations = 10000
+    data.relaxation = 0.2
+    data.tol = 1e-8
+    data.hard_thresh = 1e-10
+
+    global theta0 = inv(emp_data.sigmas_emp[2])
+    symmetrize!(theta0)
+    #= data.theta0 = theta0 =#
+    #= println(theta0) =#
 		#= @time global theta1 = quic_old(p, emp_data, emp_data.sigmas_emp[1], rho = rho, lambda = lambda, print_stats = false) =#
 		#= @time global theta2 = quic(emp_data, data, emp_data.sigmas_emp[1], rho = rho, print_stats = true, theta_prime = theta_prime) =#
     Profile.clear()
 		#= @time global theta1 = quic_old(p, emp_data, emp_data.sigmas_emp[1], rho = rho, lambda = lambda) =#
-		global theta2 = quic(emp_data, data, emp_data.sigmas_emp[1], rho = rho, theta_prime = theta_prime)
+    global theta2
+		theta2, status = quic(emp_data, data, emp_data.sigmas_emp[2], rho = rho, theta_prime = theta_prime)
 		println("Difference: ", vecnorm(theta2 - pop_data.thetas[1])^2)
     #= println("Inverse emp cov difference: ", vecnorm(inv(emp_data.sigmas_emp[1]) - pop_data.thetas[1])^2) =#
     #= println("Difference from each other: ", vecnorm(theta1 - theta2)) =#
     
     xvar = Variable(p, p)
-    sigma = emp_data.sigmas_emp[1]
-    theta_prime = eye(p)
+    sigma = emp_data.sigmas_emp[2]
+    #= theta_prime = eye(p) =#
     problem = minimize(sum(sigma .* xvar) - logdet(xvar) + lambda * vecnorm(xvar, 1) + rho/2 * vecnorm(xvar - theta_prime)^2)
-    #= solve!(problem, SCSSolver()) =#
-    #= x_convex = xvar.value =#
+    solve!(problem, SCSSolver())
+    global x_convex = xvar.value
 
+    println(vecnorm(x_convex - theta2)/vecnorm(x_convex))
+    objective(theta) = sum(sigma .* theta) - logdet(theta) + lambda * vecnorm(theta, 1) + rho/2 * vecnorm(theta - theta_prime)^2
+    println("Objectives: ", objective(x_convex), ", ", objective(theta2))
     #= println(vecnorm(x_convex - x_quic)) =#
     #= println(vecnorm(thetas[1] - x_convex)) =#
     #= println(vecnorm(thetas[1] - x_quic)) =#
@@ -208,45 +229,84 @@ module CausalMLTest
 	end
 
 	function admm_test()
-		B0 = zeros(p, p)
+    gen_data()
+		#= B0 = zeros(p, p) =#
     #= constr_data = ConstraintData_old(p) =#
     #= admm_data = ADMMData_old(emp_data, qu_data, constr_data) =#
     #= rho = 1.0 =#
     #= lambda = 1e-2 =#
     #= @time global B_admm = min_admm_old(emp_data, admm_data, lambda, B0, rho) =#
     #= println("ADMM, difference: ", vecnorm(B_admm - pop_data.B)) =#
-    println(vecnorm(pop_data.B))
 
     constr_data = ConstraintData(p)
-    lambda = 5e-3
-    admm_data = ADMMData(emp_data, constr_data, lambda)
-    admm_data.quic_data.tol = 1e-4
-    rho = 1.0
-    admm_data.rho = rho
+    lambda = 1e-1
+    global B0 = 10 * triu(randn(p, p), 1)
+
+    admm_data = ADMMData(emp_data, constr_data, 1.0)
+
+    admm_data.tol_abs = 5e-4
+    admm_data.tol_rel = 1e-3
     admm_data.quic_data.print_stats = false
-    admm_data.quic_data.inner_tol = 1e-8
-    admm_data.tol = 1e-1
+    admm_data.quic_data.tol = 1e-6
+    admm_data.quic_data.inner_tol = 1e-4
+    admm_data.quic_data.inner_min_iterations = 20
+    admm_data.quic_data.inner_max_iterations = 1000
+    admm_data.quic_data.inner_mult = 1/3
+    admm_data.quic_data.hard_thresh = 1e-10
+    admm_data.quic_data.relaxation = 0.2
+    admm_data.quic_data.beta = 0.5
+    admm_data.dual_balancing = true
+    admm_data.bb = false
+    admm_data.tighten = false
+    admm_data.mu = 4
+    admm_data.tau = 1.5
+    admm_data.B0 = B0
+    admm_data.quic_data.max_iterations = 300
+    rho = 1.0
+
+    lambdas = flipdim(logspace(-4, -1, 20), 1)
+    admm_data.rho = rho
     admm_data.low_rank = experiment_type != "binary"
-    @time global B_admm = min_admm(emp_data, admm_data, B0)
+
+    global B_admm
+    @time (B_admm, status) = min_admm(emp_data, admm_data)
     println()
     #= println("Difference between ADMM results: ", vecnorm(B_admm - B_admm2)) =#
     println("ADMM, difference: ", vecnorm(B_admm- pop_data.B))
+    println("Status: ", status)
 	end
 
 	function admm_oracle_test()
-		B0 = zeros(p, p)
+    gen_data()
+		#= global B0 = zeros(p, p) =#
+    global B0 = 10 * triu(randn(p, p), 1)
     constr_data = ConstraintData(p)
     admm_data = ADMMData(emp_data, constr_data, 1.0)
-    admm_data.tol = 1e-2
+
+    admm_data.tol_abs = 5e-4
+    admm_data.tol_rel = 1e-3
     admm_data.quic_data.print_stats = false
-    admm_data.quic_data.tol = 1e-2
+    admm_data.quic_data.tol = 1e-6
+    admm_data.quic_data.inner_tol = 1e-6
+    admm_data.quic_data.inner_min_iterations = 20
+    admm_data.quic_data.inner_mult = 1/3
+    admm_data.quic_data.hard_thresh = 1e-10
+    admm_data.quic_data.relaxation = 0.2
+    admm_data.quic_data.beta = 0.5
+    admm_data.dual_balancing = true
+    admm_data.bb = false
+    admm_data.tighten = false
+    admm_data.mu = 4
+    admm_data.tau = 1.5
     admm_data.B0 = B0
-    lambdas = logspace(-4, 4, 20)
+    admm_data.quic_data.max_iterations = 150
     rho = 1.0
+
+    lambdas = flipdim(logspace(-4, 0, 20), 1)
     admm_data.rho = rho
     admm_data.low_rank = experiment_type != "binary"
-    global errors
-    (err, lambda, errors) = min_admm_oracle(pop_data, emp_data, admm_data, lambdas)
+    global errors, B_admm
+    (B_admm, err, lambda, errors) = min_admm_oracle(pop_data, emp_data, admm_data, lambdas)
     println()
     #= println("Difference between ADMM results: ", vecnorm(B_admm - B_admm2)) =#
     println("ADMM, difference: ", err)
@@ -322,7 +382,8 @@ module CausalMLTest
     #= k = 5 =#
     #= ks = 2:1:12 =#
     ks = [1]
-    stds = 0.8:0.1:1.2
+    stds = union(0.8:0.1:1.2, 1.5:0.5:3.0)
+    #= stds = 0.8 =#
     vert = 5
     horz = 5
     ps_start = 2*vert + 2*horz
@@ -340,7 +401,7 @@ module CausalMLTest
     #= ds = 1:10 =#
     #= ds = [5,6] =#
     #= ds = [3, 6, 9] =#
-    ds = [2]
+    ds = [3]
     trials = 1
     global combined_results = []
     #= lambdas = flipdim(logspace(-4, -1, 40), 1) =#
@@ -367,14 +428,29 @@ module CausalMLTest
           for k in ks
             for std in stds
               errors1_trials = zeros(trials)
-              lambdas1_trials = zeros(trials)
               errors2_trials = zeros(trials)
-              lambdas2_trials = zeros(trials)
-              errors_llc_trials = zeros(trials)
-              lambdas_llc_trials = zeros(trials)
+              errors1_bad_trials = zeros(trials)
+              errors2_bad_trials = zeros(trials)
               errors_lh_trials = zeros(trials)
+              errors_lh_bad_trials = zeros(trials)
+              errors_noconstr_trials = zeros(trials)
+              errors_noconstr_bad_trials = zeros(trials)
+              errors_llc_trials = zeros(trials)
+              lambdas1_trials = zeros(trials)
+              lambdas2_trials = zeros(trials)
+              lambdas_llc_trials = zeros(trials)
               lambdas_lh_trials = zeros(trials)
+              lambdas1_bad_trials = zeros(trials)
+              lambdas2_bad_trials = zeros(trials)
+              lambdas_lh_trials = zeros(trials)
+              lambdas_lh_bad_trials = zeros(trials)
+              lambdas_noconstr_trials = zeros(trials)
+              lambdas_noconstr_bad_trials = zeros(trials)
               ground_truth_norms = zeros(trials)
+
+              conditioning = []
+              statuses1 = []
+              statuses1_bad = []
 
               weak_cons = falses(trials)
               strong_cons = falses(trials)
@@ -389,6 +465,7 @@ module CausalMLTest
                 #= global pop_data = PopulationData(p, d, std, experiment_type, graph_type = "clusters") =#
                 #= global pop_data = PopulationData(p, d, std, experiment_type, graph_type = "random_no_norm") =#
                 global pop_data = PopulationData(p, d, std, experiment_type, graph_type = "random")
+                push!(conditioning, cond.(pop_data.thetas))
 
                 # Determine connectedness
                 G = DiGraph(pop_data.B)
@@ -409,10 +486,12 @@ module CausalMLTest
                   admm_data.tol_rel = 1e-3
                   admm_data.quic_data.print_stats = false
                   admm_data.quic_data.tol = 1e-6
+                  admm_data.quic_data.inner_tol = 1e-6
+                  admm_data.quic_data.inner_max_iterations = 1000
                   admm_data.dual_balancing = true
                   admm_data.bb = false
-                  admm_data.tighten = true
-                  admm_data.mu = 500
+                  admm_data.tighten = false
+                  admm_data.mu = 4
                   admm_data.tau = 1.5
                   admm_data.B0 = B0
                   rho = 1.0
@@ -428,7 +507,8 @@ module CausalMLTest
 
                   global errors1, errors2, B1, B2
                   # Comined run with continuation
-                  (B1, B2, err1, err2, lambda1, lambda2, errors1, errors2) = combined_oracle(pop_data, emp_data, admm_data, lh_data, lambdas)
+                  (B1, B2, err1, err2, lambda1, lambda2, errors1, errors2, status1) = combined_oracle(pop_data, emp_data, admm_data, lh_data, lambdas)
+                  push!(statuses1, status1)
                   # Run without constraint
                   lh_data.use_constraint = false
                   (B_noconstr, err_noconstr, lambda_noconstr, errors_noconstr) = min_constr_lh_oracle(pop_data, emp_data, lh_data, lambdas) 
@@ -437,8 +517,10 @@ module CausalMLTest
                   B0_bad = 10 * triu(randn(p,p), 1)
                   admm_data.B0 = B0_bad
                   admm_data.duals = [zeros(emp_data.p, emp_data.p) for e = 1:emp_data.E] # duals
+                  admm_data.quic_data.inner_mult = 1
                   lh_data.use_constraint = true
-                  (B1_bad, B2_bad, err1_bad, err2_bad, lambda1_bad, lambda2_bad, errors1_bad, errors2_bad) = combined_oracle(pop_data, emp_data, admm_data, lh_data, lambdas)
+                  (B1_bad, B2_bad, err1_bad, err2_bad, lambda1_bad, lambda2_bad, errors1_bad, errors2_bad, status1_bad) = combined_oracle(pop_data, emp_data, admm_data, lh_data, lambdas)
+                  push!(statuses1_bad, status1_bad)
                   lh_data.use_constraint = false
                   lh_data.B0 = B0_bad
                   (B_noconstr_bad, err_noconstr_bad, lambda_noconstr_bad, errors_noconstr_bad) = min_constr_lh_oracle(pop_data, emp_data, lh_data, lambdas) 
@@ -485,6 +567,9 @@ module CausalMLTest
                 push!(combined_results, Dict("n"=>n, "p"=>p, "d"=>d,
                                              "k"=>k,
                                              "std"=>std,
+                                             "conditioning"=>conditioning,
+                                             "statuses1"=>statuses1,
+                                             "statuses1_bad"=>statuses1_bad,
                                              "errs1"=> errors1_trials,
                                              "errs2"=>errors2_trials,
                                              "errs_noconstr" => errors_noconstr_trials,
@@ -668,8 +753,8 @@ module CausalMLTest
 	#= fast_lh_test() =#
 	#= lbfgsb_test_2() =#
 	#= quic_test() =#
-  #= admm_oracle_test() =#
   #= admm_test() =#
+  #= admm_oracle_test() =#
   #= llc_test() =#
   #= lh_oracle_test() =#
   #= combined_oracle_test() =#
@@ -680,7 +765,6 @@ module CausalMLTest
   #= k_fold_test() =#
   #= admm_cv_test() =#
   #= lh_cv_test() =#
-
 
 
   combined_oracle_screen()
