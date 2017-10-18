@@ -1746,15 +1746,28 @@ function quic(emp_data,
     else
       tau = 1
     end
-    data.theta_new = data.theta + tau * data.D
+
+    posdef = false
+
+    f_new = 0.0
+
+    while ~posdef
+      copy!(data.theta_new, data.theta)
+      BLAS.axpy!(tau, data.D, data.theta_new)
+      copy!(data.W, data.theta_new)
+      try
+        LAPACK.potrf!('U', data.W)
+        f_new = BLAS.dot(p^2, data.theta_new, 1, sigma, 1) - sum(2*log(diag(data.W))) + rho/2 * vecnorm(data.diff)^2 + lambda * vecnorm(data.theta_new, 1)
+        posdef = true
+      catch
+        tau = beta * tau
+        continue
+      end
+    end
+
     if print_stats
       println("tau = ", tau)
     end
-
-    copy!(data.W, data.theta_new)
-    LAPACK.potrf!('U', data.W)
-    f_new = BLAS.dot(p^2, data.theta_new, 1, sigma, 1) - logdet(data.theta_new) + rho/2 * vecnorm(data.diff)^2 + lambda * vecnorm(data.theta_new, 1)
-
 #=     # COMMENT START =#
 #=     # Compute Armijo step size =#
 #=     alpha = 1.0 =#
