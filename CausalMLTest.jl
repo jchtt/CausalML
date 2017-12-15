@@ -1009,24 +1009,22 @@ module CausalMLTest
                            graph_type = "clusters"
                           )
 
-  elseif task == "cycles_varp"
-    # Cycles, varp
+  elseif task == "clusters_vard_norm"
+    # Clusters, vard_norm
     combined_oracle_screen(
                            admm_data,
                            lh_data,
-                           ps = [20, 34, 48, 62],
+                           ps = [32],
                            #= ns = map(x -> ceil(Int32, x), logspace(log10(20), log10(20000), 12)), =#
-                           vert = 5,
-                           horz = 5,
                            ns = 2000,
-                           ds = [3],
+                           ds = 1:10,
                            trials = 1,
-                           scales = [0.8],
+                           scales = [0.8/sqrt(10)],
                            experiment_type = "binary",
                            force_well_conditioned = false,
-                           prefix = "cycles_varp",
-                           lambdas = flipdim(logspace(-4, 0, 50), 1),
-                           graph_type = "overlap_cycles"
+                           prefix = "clusters_vard_norm",
+                           lambdas = flipdim(logspace(-4, 1, 50), 1),
+                           graph_type = "clusters_norm"
                           )
 
   elseif task == "clusters_varp"
@@ -1038,16 +1036,58 @@ module CausalMLTest
                            #= ns = map(x -> ceil(Int32, x), logspace(log10(20), log10(20000), 12)), =#
                            #= vert = 5, =#
                            #= horz = 5, =#
-                           ns = 2000,
+                           ns = ceil(Int, 2 * log2(30) * 2000),
                            ds = [4],
                            trials = 1,
                            scales = [0.8],
                            experiment_type = "binary",
                            force_well_conditioned = false,
                            prefix = "clusters_varp2",
-                           lambdas = flipdim(logspace(-4, 0, 50), 1),
-                           graph_type = "clusters"
+                           lambdas = flipdim(logspace(-4, 1, 50), 1),
+                           graph_type = "clusters",
+                           constant_n = true
                           )
+
+  elseif task == "cycles_varp"
+    # Cycles, varp
+    combined_oracle_screen(
+                           admm_data,
+                           lh_data,
+                           ps = [20, 34, 48, 62],
+                           #= ns = map(x -> ceil(Int32, x), logspace(log10(20), log10(20000), 12)), =#
+                           vert = 5,
+                           horz = 5,
+                           ns = ceil(Int, 2 * log2(62) * 2000),
+                           ds = [3],
+                           trials = 1,
+                           scales = [0.8],
+                           experiment_type = "binary",
+                           force_well_conditioned = false,
+                           prefix = "cycles_varp",
+                           lambdas = flipdim(logspace(-4, 1, 50), 1),
+                           graph_type = "overlap_cycles",
+                           constant_n = true
+                          )
+
+  elseif task == "cycles_varn"
+    # Cycles, varn
+    combined_oracle_screen(
+                           admm_data,
+                           lh_data,
+                           ps = [34],
+                           ns = map(x -> ceil(Int32, x), logspace(log10(20), log10(20000), 12)),
+                           vert = 5,
+                           horz = 5,
+                           ds = [3],
+                           trials = 1,
+                           scales = [0.8],
+                           experiment_type = "binary",
+                           force_well_conditioned = false,
+                           prefix = "cycles_varp",
+                           lambdas = flipdim(logspace(-4, 1, 50), 1),
+                           graph_type = "overlap_cycles"
+                          )
+
 
   elseif task == "rand_missing"
     # Random, missing exps

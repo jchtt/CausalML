@@ -3,13 +3,20 @@
 import os
 import datetime
 import time
+import pathlib
 
-tasks = [("semi_synth_vare", 1)]
+# tasks = [("semi_synth_vare", 1)]
+tasks = [
+        ("clusters_vard_norm", 32),
+        ("clusters_varp", 32),
+        ("cycles_varp", 32),
+        ("cycles_varn", 32),
+        ]
 last_start = 7
 last_minute = 0
 cur_time = datetime.datetime.now()
 # cut_off = cur_time
-cut_off = cur_time + datetime.timedelta(days = 1)
+cut_off = cur_time + datetime.timedelta(days = 2)
 cut_off = cut_off.replace(hour = last_start, minute = last_minute, second = 0)
 # cut_off = cur_time.replace(minute = 57)
 
@@ -18,8 +25,10 @@ task_index = 0
 task = tasks[task_index][0]
 end_index = tasks[task_index][1]
 
-while cur_time < cut_off and start_index <= end_index and task_index < len(tasks):
-    os.system("julia5 CausalMLTest.jl {} {} &> ./logs/log_{}.txt".format(start_index, task, start_index))
+# while cur_time < cut_off and start_index <= end_index and task_index < len(tasks):
+while start_index <= end_index and task_index < len(tasks):
+    pathlib.Path('./logs_{}'.format(task)).mkdir(parents=True, exist_ok=True) 
+    os.system("julia5 CausalMLTest.jl {} {} &> ./logs_{}/log_{}.txt".format(start_index, task, task, start_index))
     # os.system("touch test/{}".format(start_index))
     time.sleep(1)
 

@@ -213,6 +213,8 @@ type PopulationData
       ret.B = gen_clusters(p, d, std/d)
     elseif graph_type == "clusters_no_norm"
       ret.B = gen_clusters(p, d, std)
+    elseif graph_type == "clusters_norm"
+      ret.B = gen_clusters(p, d, std/sqrt(d))
     else
       error("Unknown graph type")
     end
