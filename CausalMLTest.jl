@@ -27,14 +27,14 @@ module CausalMLTest
   # Optional
 	using Calculus
   using LightGraphs
-  #= using Convex =#
-  #= using SCS =#
+  using Convex
+  using SCS
   #= using JLD =#
 
 	experiment_type = "binary"
-	const p = 10
-	const d = 2
-	matrix_std = 3
+	const p = 50
+	const d = 5
+	matrix_std = 5.0
 	lambda = 1e-1
 	n = Int32(1e4)
 
@@ -46,8 +46,13 @@ module CausalMLTest
 	# Generate data
   function gen_data()
     println("Generating data")
-    global pop_data = PopulationData(p, d, matrix_std, experiment_type)
-    global emp_data = EmpiricalData(pop_data, n)
+    while true
+      global pop_data = PopulationData(p, d, matrix_std, experiment_type)
+      global emp_data = EmpiricalData(pop_data, n)
+      if maximum(cond.(pop_data.thetas)) > 1e4 #|| true
+        break
+      end
+    end
   end
 
 	#= if "lbfgsb_test" in run_ops =#
@@ -175,6 +180,88 @@ module CausalMLTest
 	#= 	#1= println("Slack: ", s) =1# =#
 	#= end =#
 
+	function graph_lasso_admm_test()
+    gen_data()
+    data = QuadraticPenaltyData(p)
+    lambda = 1e-2
+    rho = 10.0
+    B0 = 10*triu(randn(p, p), 1)
+    #= B0 = zeros(p, p) =#
+    U = emp_data.Us[2]
+    global theta_prime = (I - U * B0)' * (I - U * B0)
+    #= theta_prime = zeros(p,p) =#
+    data.lambda = lambda
+    data.print_stats = false
+    data.inner_mult = 1/3
+    data.inner_min_iterations = 10
+    data.inner_tol = 1e-7
+    data.max_iterations = 50
+    data.inner_max_iterations = 2000
+    data.relaxation = 0.2
+    data.tol = 1e-7
+    data.hard_thresh = 1e-10
+    data.dual_balancing = true
+    #= data.balance_mult = =# 
+
+    #= global theta0 = inv(emp_data.sigmas_emp[2]) =#
+    #= symmetrize!(theta0) =#
+    theta0 = zeros(p, p)
+    #= data.theta0 = theta0 =#
+    #= println(theta0) =#
+		#= @time global theta1 = quic_old(p, emp_data, emp_data.sigmas_emp[1], rho = rho, lambda = lambda, print_stats = false) =#
+		#= @time global theta2 = quic(emp_data, data, emp_data.sigmas_emp[1], rho = rho, print_stats = true, theta_prime = theta_prime) =#
+    Profile.clear()
+		#= @time global theta1 = quic_old(p, emp_data, emp_data.sigmas_emp[1], rho = rho, lambda = lambda) =#
+    println("Starting quic")
+    (theta_quic, status) = quic(emp_data, data, emp_data.sigmas_emp[2], rho = rho, theta_prime = theta_prime)
+    #= @time (theta_quic, status) = quic(emp_data, data, emp_data.sigmas_emp[2], rho = rho, theta_prime = theta_prime) =#
+    theta_quic = copy(theta_quic)
+
+    #= data.tol = 1e-5 * 0.1 =#
+    #= data.tol_rel = 1e-4 * 0.1 =#
+    data.max_iterations = 1000
+    global theta0 = inv(emp_data.sigmas_emp[2])
+    symmetrize!(theta0)
+    (theta_admm, status) = graph_lasso_admm(emp_data, data, emp_data.sigmas_emp[2], rho = rho, theta_prime = theta_prime)
+    @time (theta_admm, status) = graph_lasso_admm(emp_data, data, emp_data.sigmas_emp[2], rho = rho, theta_prime = theta_prime)
+		println("Difference admm: ", vecnorm(theta_admm - pop_data.thetas[2])^2)
+    #= println("Inverse emp cov difference: ", vecnorm(inv(emp_data.sigmas_emp[1]) - pop_data.thetas[1])^2) =#
+    #= println("Difference from each other: ", vecnorm(theta1 - theta2)) =#
+    
+    xvar = Variable(p, p)
+    sigma = emp_data.sigmas_emp[2]
+    #= theta_prime = eye(p) =#
+    problem = minimize(sum(sigma .* xvar) - logdet(xvar) + lambda * vecnorm(xvar, 1) + rho/2 * vecnorm(xvar - theta_prime)^2)
+    #= solve!(problem, SCSSolver(max_iters = 10000)) =#
+    #= global x_convex = xvar.value =#
+    x_convex = eye(p)
+    
+
+    function g_min(theta)
+      theta_inv = inv(theta)
+      symmetrize!(theta_inv)
+      G = sigma - theta_inv + rho * (theta - theta_prime)
+      for i in eachindex(G)
+        if theta[i] > 0
+          G[i] += lambda
+        elseif theta[i] < 0
+          G[i] -= lambda
+        else
+          G[i] = soft_thresh(G[i], lambda)
+        end
+      end
+      return G
+    end
+
+    println("Difference to convex, admm: ", vecnorm(x_convex - theta_admm)/vecnorm(x_convex))
+    println("Difference to convex, quic: ", vecnorm(x_convex - theta_quic)/vecnorm(x_convex))
+    objective(theta) = sum(sigma .* theta) - logdet(theta) + lambda * vecnorm(theta, 1) + rho/2 * vecnorm(theta - theta_prime)^2
+    println("Objectives: convex = ", objective(x_convex))
+    println("Objectives: admm = ", objective(theta_admm))
+    println("Objectives: quic = ", objective(theta_quic))
+    println("Gmins: admm = ", vecnorm(g_min(theta_admm)), ", quic = ", vecnorm(g_min(theta_quic)))
+	end
+
 	function quic_test()
     gen_data()
     data = QuadraticPenaltyData(p)
@@ -239,8 +326,10 @@ module CausalMLTest
     #= println("ADMM, difference: ", vecnorm(B_admm - pop_data.B)) =#
 
     constr_data = ConstraintData(p)
-    lambda = 1e-1
-    global B0 = 10 * triu(randn(p, p), 1)
+    lambda = 1e-2
+    #= global B0 = 10 * triu(randn(p, p), 1) =#
+    global B0 = zeros(p, p)
+    global pop_data
 
     admm_data = ADMMData(emp_data, constr_data, 1.0)
 
@@ -255,13 +344,14 @@ module CausalMLTest
     admm_data.quic_data.hard_thresh = 1e-10
     admm_data.quic_data.relaxation = 0.2
     admm_data.quic_data.beta = 0.5
+    admm_data.quic_data.dual_balancing = true
     admm_data.dual_balancing = true
     admm_data.bb = false
     admm_data.tighten = false
     admm_data.mu = 4
     admm_data.tau = 1.5
     admm_data.B0 = B0
-    admm_data.quic_data.max_iterations = 300
+    admm_data.quic_data.max_iterations = 1000
     rho = 1.0
 
     lambdas = flipdim(logspace(-4, -1, 20), 1)
@@ -377,232 +467,230 @@ module CausalMLTest
     println("LH, cv lambda: ", lambda2_cv, ", difference: ", vecnorm(B2_cv - pop_data.B))
   end
 
-  function combined_oracle_screen()
-    experiment_type = "binary"
-    #= k = 5 =#
-    #= ks = 2:1:12 =#
-    ks = [1]
-    stds = union(0.8:0.1:1.2, 1.5:0.5:3.0)
-    #= stds = 0.8 =#
-    vert = 5
-    horz = 5
-    ps_start = 2*vert + 2*horz
-    #= ps = ps_start:2*horz+vert-1:120 =#
-    #= println("Values for p: ", ps) =#
-    ps = [20]
-    #= ps = 10:10:100 =#
-    #= ps = [10] =#
-    #= ns = map(x -> ceil(Int32, x), logspace(log10(50), 4, 10)) =#
-    #= ns = map(x -> ceil(Int32, x), logspace(4, log10(25000), 5)) =#
-    #= ns = map(x -> ceil(Int32, x), logspace(log10(200), log10(25000), 15)) =#
-    #= ns = [50] =#
-    ns = 10000
-    #= ds = union(1:10, 12:2:20, 24:4:40) =#
-    #= ds = 1:10 =#
-    #= ds = [5,6] =#
-    #= ds = [3, 6, 9] =#
-    ds = [3]
-    trials = 1
-    global combined_results = []
-    #= lambdas = flipdim(logspace(-4, -1, 40), 1) =#
-    #= lambdas = flipdim(logspace(-4, -1, 3), 1) =#
-    lambdas = flipdim(logspace(-4, -1, 50), 1)
-    #= lambdas = [1e-3] =#
-    #= lambdas = [1e-2] =#
-    #= lambdas_col = [[0.004498432668969444], [0.005179474679231213, 0.004498432668969444], ] =#
-    #= lambdas_col = [[0.004498432668969444]] =#
-    #= lambdas_col = [[0.1]] =#
+  function combined_oracle_screen(admm_data,
+                                  lh_data;
+                                  ps = [20],
+                                  ns = [10000],
+                                  ds = [5],
+                                  ks = [5],
+                                  trials = 1,
+                                  scales = [0.8],
+                                  experiment_type = "binary",
+                                  vert = 5,
+                                  horz = 5,
+                                  lambdas = flipdim(logspace(-4, -1, 50), 1),
+                                  prefix = "debug2.bin",
+                                  force_well_conditioned = false,
+                                  bad_init = false,
+                                  graph_type = "random",
+                                  missing_exps = [0],
+                                  B_fixed = [],
+                                  constant_n = false
+                                 )
 
-    fname = "debug2.bin"
+    global combined_results = []
+
     debug_data = []
 
-    if length(ARGS) >= 1 
+    if length(ARGS) >= 1
       suffix = ARGS[1]
     else
       suffix = ""
     end
 
-    for n in ns
-      for p in ps
-        for d in ds
-          for k in ks
-            for std in stds
-              errors1_trials = zeros(trials)
-              errors2_trials = zeros(trials)
-              errors1_bad_trials = zeros(trials)
-              errors2_bad_trials = zeros(trials)
-              errors_lh_trials = zeros(trials)
-              errors_lh_bad_trials = zeros(trials)
-              errors_noconstr_trials = zeros(trials)
-              errors_noconstr_bad_trials = zeros(trials)
-              errors_llc_trials = zeros(trials)
-              lambdas1_trials = zeros(trials)
-              lambdas2_trials = zeros(trials)
-              lambdas_llc_trials = zeros(trials)
-              lambdas_lh_trials = zeros(trials)
-              lambdas1_bad_trials = zeros(trials)
-              lambdas2_bad_trials = zeros(trials)
-              lambdas_lh_trials = zeros(trials)
-              lambdas_lh_bad_trials = zeros(trials)
-              lambdas_noconstr_trials = zeros(trials)
-              lambdas_noconstr_bad_trials = zeros(trials)
-              ground_truth_norms = zeros(trials)
+    for n in ns,
+      p in ps,
+      d in ds,
+      k in ks,
+      scale in scales,
+      missing in missing_exps
 
-              conditioning = []
-              statuses1 = []
-              statuses1_bad = []
+      errors1_trials = zeros(trials)
+      errors2_trials = zeros(trials)
+      errors1_bad_trials = zeros(trials)
+      errors2_bad_trials = zeros(trials)
+      errors_lh_trials = zeros(trials)
+      errors_lh_bad_trials = zeros(trials)
+      errors_noconstr_trials = zeros(trials)
+      errors_noconstr_bad_trials = zeros(trials)
+      errors_llc_trials = zeros(trials)
+      lambdas1_trials = zeros(trials)
+      lambdas2_trials = zeros(trials)
+      lambdas_llc_trials = zeros(trials)
+      lambdas_lh_trials = zeros(trials)
+      lambdas1_bad_trials = zeros(trials)
+      lambdas2_bad_trials = zeros(trials)
+      lambdas_lh_trials = zeros(trials)
+      lambdas_lh_bad_trials = zeros(trials)
+      lambdas_noconstr_trials = zeros(trials)
+      lambdas_noconstr_bad_trials = zeros(trials)
+      ground_truth_norms = zeros(trials)
 
-              weak_cons = falses(trials)
-              strong_cons = falses(trials)
-              cyclics = falses(trials)
+      conditioning = []
+      statuses1 = []
+      statuses1_bad = []
 
-              for trial in 1:trials
-                println("Generating data")
-                #= combined = loadvar(fname)[1] =#
-                #= pop_data = combined[1] =#
-                #= emp_data = combined[2] =#
-                #= global pop_data = PopulationData(p, d, std, experiment_type, graph_type = "overlap_cycles", k = k, horz = horz, vert = vert) =#
-                #= global pop_data = PopulationData(p, d, std, experiment_type, graph_type = "clusters") =#
-                #= global pop_data = PopulationData(p, d, std, experiment_type, graph_type = "random_no_norm") =#
-                global pop_data = PopulationData(p, d, std, experiment_type, graph_type = "random")
-                push!(conditioning, cond.(pop_data.thetas))
+      weak_cons = falses(trials)
+      strong_cons = falses(trials)
+      cyclics = falses(trials)
 
-                # Determine connectedness
-                G = DiGraph(pop_data.B)
-                strong_cons[trial] = is_strongly_connected(G)
-                weak_cons[trial] = is_weakly_connected(G)
-                cyclics[trial] = is_cyclic(G)
+      for trial in 1:trials
+        tic()
+        println("Generating data")
+        #= combined = loadvar(fname)[1] =#
+        #= pop_data = combined[1] =#
+        #= emp_data = combined[2] =#
+        #= global pop_data = PopulationData(p, d, scale, experiment_type, graph_type = "overlap_cycles", k = k, horz = horz, vert = vert) =#
+        #= global pop_data = PopulationData(p, d, scale, experiment_type, graph_type = "clusters") =#
+        #= global pop_data = PopulationData(p, d, scale, experiment_type, graph_type = "random_no_norm") =#
+        global pop_data
 
-                emp_data = EmpiricalData(pop_data, n)
-                #= push!(debug_data, [pop_data, emp_data]) =#
-                #= savevar(fname, debug_data) =#
-                ground_truth_norms[trial] = vecnorm(pop_data.B)
-
-                #= for lambdas in lambdas_col =#
-                  B0 = zeros(p, p)
-                  constr_data = ConstraintData(p)
-                  admm_data = ADMMData(emp_data, constr_data, 1.0)
-                  admm_data.tol_abs = 5e-4
-                  admm_data.tol_rel = 1e-3
-                  admm_data.quic_data.print_stats = false
-                  admm_data.quic_data.tol = 1e-6
-                  admm_data.quic_data.inner_tol = 1e-6
-                  admm_data.quic_data.inner_max_iterations = 1000
-                  admm_data.dual_balancing = true
-                  admm_data.bb = false
-                  admm_data.tighten = false
-                  admm_data.mu = 4
-                  admm_data.tau = 1.5
-                  admm_data.B0 = B0
-                  rho = 1.0
-                  #= rho = 0.8670764957916309 =#
-                  admm_data.rho = rho
-                  admm_data.low_rank = experiment_type != "binary"
-                  #= admm_data.low_rank = true =#
-                  lh_data = VanillaLHData(p, 1, B0)
-                  lh_data.low_rank = experiment_type != "binary"
-                  #= lh_data.low_rank = true =#
-                  lh_data.final_tol = 1e-3
-                  lh_data.use_constraint = true
-
-                  global errors1, errors2, B1, B2
-                  # Comined run with continuation
-                  (B1, B2, err1, err2, lambda1, lambda2, errors1, errors2, status1) = combined_oracle(pop_data, emp_data, admm_data, lh_data, lambdas)
-                  push!(statuses1, status1)
-                  # Run without constraint
-                  lh_data.use_constraint = false
-                  (B_noconstr, err_noconstr, lambda_noconstr, errors_noconstr) = min_constr_lh_oracle(pop_data, emp_data, lh_data, lambdas) 
-
-                  # Same thing, with bad initialization
-                  B0_bad = 10 * triu(randn(p,p), 1)
-                  admm_data.B0 = B0_bad
-                  admm_data.duals = [zeros(emp_data.p, emp_data.p) for e = 1:emp_data.E] # duals
-                  admm_data.quic_data.inner_mult = 1
-                  lh_data.use_constraint = true
-                  (B1_bad, B2_bad, err1_bad, err2_bad, lambda1_bad, lambda2_bad, errors1_bad, errors2_bad, status1_bad) = combined_oracle(pop_data, emp_data, admm_data, lh_data, lambdas)
-                  push!(statuses1_bad, status1_bad)
-                  lh_data.use_constraint = false
-                  lh_data.B0 = B0_bad
-                  (B_noconstr_bad, err_noconstr_bad, lambda_noconstr_bad, errors_noconstr_bad) = min_constr_lh_oracle(pop_data, emp_data, lh_data, lambdas) 
-
-                  # Run only likelihood
-                  lh_data.continuation = false
-                  lh_data.use_constraint = false
-                  lh_data.B0 = zeros(p, p)
-                  (B_lh, err_lh, lambda_lh, errors_lh) = min_constr_lh_oracle(pop_data, emp_data, lh_data, lambdas) 
-
-                  lh_data.B0 = B0_bad
-                  (B_lh_bad, err_lh_bad, lambda_lh_bad, errors_lh_bad) = min_constr_lh_oracle(pop_data, emp_data, lh_data, lambdas) 
-
-                  # Run LLC
-                  (B, err, lambda, _) = llc(pop_data, emp_data, lambdas)
-
-                  # Save variables over trials
-                  errors1_trials[trial] = err1
-                  errors2_trials[trial] = err2
-                  errors_noconstr_trials[trial] = err_noconstr
-                  errors1_bad_trials[trial] = err1_bad
-                  errors2_bad_trials[trial] = err2_bad
-                  errors_noconstr_bad_trials[trial] = err_noconstr_bad
-                  errors_llc_trials[trial] = err
-                  errors_lh_trials[trial] = err_lh
-                  errors_lh_bad_trials[trial] = err_lh_bad
-
-                  lambdas1_trials[trial] = lambda1
-                  lambdas2_trials[trial] = lambda2
-                  lambdas_noconstr_trials[trial] = lambda_noconstr
-                  lambdas1_bad_trials[trial] = lambda1_bad
-                  lambdas2_bad_trials[trial] = lambda2_bad
-                  lambdas_noconstr_bad_trials[trial] = lambda_noconstr_bad
-                  lambdas_llc_trials[trial] = lambda
-                  lambdas_lh_trials[trial] = lambda_lh
-                  lambdas_lh_bad_trials[trial] = lambda_lh_bad
-
-                  println()
-                  #= println("Difference between ADMM results: ", vecnorm(B_admm - B_admm2)) =#
-                  println("ADMM, difference: ", err1)
-                  println("LH, difference: ", err2)
-                #= end =#
-
-                push!(combined_results, Dict("n"=>n, "p"=>p, "d"=>d,
-                                             "k"=>k,
-                                             "std"=>std,
-                                             "conditioning"=>conditioning,
-                                             "statuses1"=>statuses1,
-                                             "statuses1_bad"=>statuses1_bad,
-                                             "errs1"=> errors1_trials,
-                                             "errs2"=>errors2_trials,
-                                             "errs_noconstr" => errors_noconstr_trials,
-                                             "errs1_bad"=> errors1_bad_trials,
-                                             "errs2_bad"=>errors2_bad_trials,
-                                             "errs_noconstr_bad" => errors_noconstr_bad_trials,
-                                             "errs_lh" => errors_lh_trials,
-                                             "errs_lh_bad" => errors_lh_bad_trials,
-                                             "errs_llc"=>errors_llc_trials,
-                                             "lambdas1"=>lambdas1_trials,
-                                             "lambdas2"=>lambdas2_trials,
-                                             "lambdas1_bad"=> lambdas1_bad_trials,
-                                             "lambdas2_bad"=>lambdas2_bad_trials,
-                                             "lambdas_noconstr_bad" => lambdas_noconstr_bad_trials,
-                                             "lambdas_noconstr"=>lambdas2_trials,
-                                             "lambdas_llc"=>lambdas_llc_trials,
-                                             "lambdas_lh"=>lambdas_lh_trials,
-                                             "lambdas_lh_bad"=>lambdas_lh_bad_trials,
-                                             "weak_cons" => weak_cons,
-                                             "strong_cons" => strong_cons,
-                                             "cyclics" => cyclics,
-                                             "exps" => pop_data.E,
-                                             "gt"=>ground_truth_norms))
-
-                fname = "CausalML/results/results_rand_nonorm_stdcomp_" * suffix * ".bin"
-                open(fname, "w") do file
-                  serialize(file, combined_results)
-                end
-              end
-
+        if force_well_conditioned
+          ill_conditioned = true
+          ind_conditioning = zeros(0)
+          while ill_conditioned
+            pop_data = PopulationData(p, d, scale, experiment_type, graph_type = graph_type, missing_exps = missing, B_fixed = B_fixed, horz = horz, vert = vert, k = k)
+            ind_conditioning = cond.(pop_data.thetas)
+            if maximum(ind_conditioning) < 1e3
+              ill_conditioned = false
             end
           end
+        else
+          pop_data = PopulationData(p, d, scale, experiment_type, graph_type = graph_type, missing_exps = missing, B_fixed = B_fixed, horz = horz, vert = vert, k = k)
+          ind_conditioning = cond.(pop_data.thetas)
         end
+
+        #= println("Condition number: ", cond(eye(p) - pop_data.B)) =#
+
+        push!(conditioning, ind_conditioning)
+
+        # Determine connectedness
+        G = DiGraph(pop_data.B)
+        strong_cons[trial] = is_strongly_connected(G)
+        weak_cons[trial] = is_weakly_connected(G)
+        cyclics[trial] = is_cyclic(G)
+
+        # Generate samples
+        n_effective = constant_n ? ceil(Int, n/pop_data.E) : n
+        emp_data = EmpiricalData(pop_data, n_effective)
+        #= push!(debug_data, [pop_data, emp_data]) =#
+        #= savevar(fname, debug_data) =#
+        ground_truth_norms[trial] = vecnorm(pop_data.B)
+
+        # Reset parameters
+        reinit_admm(admm_data, p, emp_data.E)
+        reinit_quic_data(admm_data.quic_data, p)
+        reinit_lh_data(lh_data, p)
+        lh_data.use_constraint = true
+
+        global errors1, errors2, B1, B2
+        # Comined run with continuation
+        (B1, B2, err1, err2, lambda1, lambda2, errors1, errors2, status1) = combined_oracle(pop_data, emp_data, admm_data, lh_data, lambdas)
+        push!(statuses1, status1)
+        # Run without constraint
+        lh_data.use_constraint = false
+        (B_noconstr, err_noconstr, lambda_noconstr, errors_noconstr) = min_constr_lh_oracle(pop_data, emp_data, lh_data, lambdas) 
+
+        # Same thing, with bad initialization
+        if bad_init
+          B0_bad = 10 * triu(randn(p,p), 1)
+          admm_data.B0 = B0_bad
+          admm_data.duals = [zeros(emp_data.p, emp_data.p) for e = 1:emp_data.E] # duals
+          admm_data.quic_data.inner_mult = 1
+          lh_data.use_constraint = true
+          (B1_bad, B2_bad, err1_bad, err2_bad, lambda1_bad, lambda2_bad, errors1_bad, errors2_bad, status1_bad) = combined_oracle(pop_data, emp_data, admm_data, lh_data, lambdas)
+          push!(statuses1_bad, status1_bad)
+          lh_data.use_constraint = false
+          lh_data.B0 = B0_bad
+          (B_noconstr_bad, err_noconstr_bad, lambda_noconstr_bad, errors_noconstr_bad) = min_constr_lh_oracle(pop_data, emp_data, lh_data, lambdas) 
+        end
+
+        # Run only likelihood
+        println("Run likelihood only")
+        lh_data.continuation = false
+        lh_data.use_constraint = false
+        lh_data.B0 = zeros(p, p)
+        (B_lh, err_lh, lambda_lh, errors_lh) = min_constr_lh_oracle(pop_data, emp_data, lh_data, lambdas) 
+
+        if bad_init
+          lh_data.B0 = B0_bad
+          (B_lh_bad, err_lh_bad, lambda_lh_bad, errors_lh_bad) = min_constr_lh_oracle(pop_data, emp_data, lh_data, lambdas) 
+        end
+
+        # Run LLC
+        (B, err, lambda, _) = llc(pop_data, emp_data, lambdas)
+
+        # Save variables over trials
+        errors1_trials[trial] = err1
+        errors2_trials[trial] = err2
+        errors_noconstr_trials[trial] = err_noconstr
+        errors_llc_trials[trial] = err
+        errors_lh_trials[trial] = err_lh
+
+
+        lambdas1_trials[trial] = lambda1
+        lambdas2_trials[trial] = lambda2
+        lambdas_noconstr_trials[trial] = lambda_noconstr
+        lambdas_llc_trials[trial] = lambda
+        lambdas_lh_trials[trial] = lambda_lh
+
+        if bad_init
+          errors1_bad_trials[trial] = err1_bad
+          errors2_bad_trials[trial] = err2_bad
+          errors_noconstr_bad_trials[trial] = err_noconstr_bad
+          errors_lh_bad_trials[trial] = err_lh_bad
+
+          lambdas1_bad_trials[trial] = lambda1_bad
+          lambdas2_bad_trials[trial] = lambda2_bad
+          lambdas_noconstr_bad_trials[trial] = lambda_noconstr_bad
+          lambdas_lh_bad_trials[trial] = lambda_lh_bad
+        end
+
+        println()
+        #= println("Difference between ADMM results: ", vecnorm(B_admm - B_admm2)) =#
+        println("ADMM, difference: ", err1)
+        println("LH, difference: ", err2)
+
+        push!(combined_results, Dict("n"=>n, "p"=>p, "d"=>d,
+                                     "k"=>k,
+                                     "std"=>scale,
+                                     "missing_exps"=>missing,
+                                     "conditioning"=>conditioning,
+                                     "statuses1"=>statuses1,
+                                     "statuses1_bad"=>statuses1_bad,
+                                     "errs1"=> errors1_trials,
+                                     "errs2"=>errors2_trials,
+                                     "errs_noconstr" => errors_noconstr_trials,
+                                     "errs1_bad"=> errors1_bad_trials,
+                                     "errs2_bad"=>errors2_bad_trials,
+                                     "errs_noconstr_bad" => errors_noconstr_bad_trials,
+                                     "errs_lh" => errors_lh_trials,
+                                     "errs_lh_bad" => errors_lh_bad_trials,
+                                     "errs_llc"=>errors_llc_trials,
+                                     "lambdas1"=>lambdas1_trials,
+                                     "lambdas2"=>lambdas2_trials,
+                                     "lambdas1_bad"=> lambdas1_bad_trials,
+                                     "lambdas2_bad"=>lambdas2_bad_trials,
+                                     "lambdas_noconstr_bad" => lambdas_noconstr_bad_trials,
+                                     "lambdas_noconstr"=>lambdas2_trials,
+                                     "lambdas_llc"=>lambdas_llc_trials,
+                                     "lambdas_lh"=>lambdas_lh_trials,
+                                     "lambdas_lh_bad"=>lambdas_lh_bad_trials,
+                                     "weak_cons" => weak_cons,
+                                     "strong_cons" => strong_cons,
+                                     "cyclics" => cyclics,
+                                     "exps" => pop_data.E,
+                                     "gt"=>ground_truth_norms,
+                                     "constant_n"=>constant_n
+                                    ))
+
+        mkpath("results_" * prefix)
+        fname = joinpath("results_" * prefix, "results_" * suffix * ".bin")
+        open(fname, "w") do file
+          serialize(file, combined_results)
+        end
+
+        toc()
       end
     end
   end
@@ -718,11 +806,12 @@ module CausalMLTest
 
   function lh_cv_test()
     experiment_type = "binary"
-    n = 100
-    p = 50
-    d = 5
+    n = 3000
+    p = 20
+    d = 4
     k = 2
-    lambdas = flipdim(logspace(-4, 0, 30), 1)
+    lambdas = flipdim(logspace(-4, 0, 10), 1)
+    constraints = flipdim(logspace(-2, 2, 20), 1)
 
     println("Generating data")
     global pop_data = PopulationData(p, d, matrix_std, experiment_type)
@@ -730,6 +819,7 @@ module CausalMLTest
     emp_data = EmpiricalData(pop_data, n)
 
     B0 = zeros(p, p)
+    #= B0 = 0.01 * randn(p, p) =#
     constr_data = ConstraintData(p)
     lh_data = VanillaLHData(p, 1, B0)
     lh_data.low_rank = experiment_type != "binary"
@@ -737,22 +827,61 @@ module CausalMLTest
 		lh_data.x_base = mat2vec(pop_data.B, emp_data)
     lh_data.upper_bound = vecnorm(pop_data.B)^2
     lh_data.use_constraint = true
+    lh_data.continuation = true
 
     global errors, lhs
+    global B_cv, B_oracle, B_cv2, B_oracle2
 
+    println(pop_data.B)
     global lh_val2 = lh(emp_data, lh_data, mat2vec(pop_data.B, emp_data), [])
     println("B lh: ", lh_val2)
 
-    (B_cv, lh_val, lambda_cv, lhs) = min_constr_lh_cv(pop_data, emp_data, lh_data, lambdas, k)
+    #= (B_cv, lh_val, lambda_cv, ub_cv, lhs) = min_constr_lh_cv(pop_data, emp_data, lh_data, lambdas, k, constraints) =#
+    println(lh_data.B0)
+    (B_cv, lh_val, lambda_cv, ub_cv, lhs) = min_constr_lh_cv(pop_data, emp_data, lh_data, lambdas, k)
+    lh_data.lambda = lambda_cv
+    B_cv2 = copy(min_constraint_lh(emp_data, lh_data))
+    println(lh_data.B0)
     (B_oracle, err_oracle, lambda_oracle, errors) = min_constr_lh_oracle(pop_data, emp_data, lh_data, lambdas)
+    lh_data.lambda = lambda_oracle
+    B_oracle2 = copy(min_constraint_lh(emp_data, lh_data))
 
-    println("CV: ", lambda_cv, ", ", vecnorm(B_cv - pop_data.B))
-    println("Oracle: ", lambda_oracle, ", ", vecnorm(B_oracle - pop_data.B))
+    println("CV: lambda = ", lambda_cv, ", upper bound = ", ub_cv, ", distance = ", vecnorm(B_cv - pop_data.B))
+    println("Oracle: lambda = ", lambda_oracle, ", upper bound = ", vecnorm(pop_data.B)^2, ", distance = ", vecnorm(B_oracle - pop_data.B))
+    println("Diff cv: ", vecnorm(B_cv - B_cv2))
+    println("Diff oracle: ", vecnorm(B_oracle - B_oracle2))
+  end
+
+  using Plots
+  function test_condition_number()
+    plotlyjs()
+
+    p = 200
+    d = 5
+    std = 0.8
+    repeats = 100
+    n = 1000
+    I = eye(p)
+    global conds = zeros(repeats)
+    global conds_emp = zeros(repeats)
+    global pop_data
+
+    for i = 1:repeats
+      println("Repeat: ", i)
+      #= B = gen_b(p, d, std/d) =#
+      pop_data = PopulationData(p, d, std, "binary")
+      emp_data = EmpiricalData(pop_data, n)
+      #= conds[i] = cond(I - B) =#
+      conds[i] = maximum(cond.(pop_data.thetas))
+      #= conds_emp[i] = maximum(cond.(emp_data.sigmas_emp)) =#
+    end
+    Plots.histogram(conds)
   end
 
 	#= fast_lh_test() =#
 	#= lbfgsb_test_2() =#
 	#= quic_test() =#
+  #= graph_lasso_admm_test() =#
   #= admm_test() =#
   #= admm_oracle_test() =#
   #= llc_test() =#
@@ -765,7 +894,304 @@ module CausalMLTest
   #= k_fold_test() =#
   #= admm_cv_test() =#
   #= lh_cv_test() =#
+  #= test_condition_number() =#
 
 
-  combined_oracle_screen()
+  tic()
+  #= combined_oracle_screen() =#
+
+  # Choose task
+  if length(ARGS) >= 2
+    task = ARGS[2]
+  else
+    task = "rand_vark"
+  end
+
+  # Set parameters
+  p = 10
+  B0 = zeros(p, p)
+  constr_data = ConstraintData(p)
+  admm_data = ADMMData(p, 1, constr_data, 1.0)
+  admm_data.tol_abs = 5e-4
+  admm_data.tol_rel = 1e-3
+  admm_data.quic_data.print_stats = false
+  admm_data.quic_data.tol = 1e-5
+  admm_data.quic_data.tol_rel = 1e-4
+  admm_data.quic_data.inner_tol = 1e-6
+  admm_data.quic_data.inner_max_iterations = 2000
+  admm_data.quic_data.max_iterations = 1000
+  admm_data.quic_data.dual_balancing =true
+  admm_data.graph_lasso_method = "quic"
+  admm_data.dual_balancing = true
+  admm_data.bb = false
+  admm_data.tighten = false
+  admm_data.mu = 4
+  admm_data.tau = 1.5
+  admm_data.B0 = B0
+  rho = 1.0
+  #= rho = 0.8670764957916309 =#
+  admm_data.rho = rho
+  admm_data.low_rank = experiment_type != "binary"
+  #= admm_data.low_rank = true =#
+
+  lh_data = VanillaLHData(p, 1, B0)
+  lh_data.low_rank = experiment_type != "binary"
+  #= lh_data.low_rank = true =#
+  lh_data.final_tol = 1e-3
+  lh_data.use_constraint = true
+
+  # Clusters
+  constr_data = ConstraintData(p)
+  admm_data = ADMMData(p, 1, constr_data, 1.0)
+  admm_data.tol_abs = 5e-4
+  admm_data.tol_rel = 1e-3
+  admm_data.quic_data.print_stats = false
+  admm_data.quic_data.tol = 1e-6
+  admm_data.quic_data.tol_rel = 1e-4
+  admm_data.quic_data.inner_tol = 1e-7
+  admm_data.quic_data.inner_max_iterations = 2000
+  admm_data.quic_data.max_iterations = 1000
+  admm_data.quic_data.dual_balancing = true
+  admm_data.graph_lasso_method = "quic"
+  admm_data.dual_balancing = true
+  admm_data.bb = false
+  admm_data.tighten = false
+  admm_data.mu = 4
+  admm_data.tau = 1.5
+  admm_data.B0 = B0
+  admm_data.warm_start = false
+  admm_data.max_iterations = 200
+  rho = 1.0
+  #= rho = 0.8670764957916309 =#
+  admm_data.rho = rho
+  admm_data.low_rank = experiment_type != "binary"
+  #= admm_data.low_rank = true =#
+
+  lh_data = VanillaLHData(p, 1, B0)
+  lh_data.low_rank = experiment_type != "binary"
+  #= lh_data.low_rank = true =#
+  lh_data.final_tol = 1e-3
+  lh_data.use_constraint = true
+
+  if task == "clusters_varn"
+    # Clusters, varn
+    combined_oracle_screen(
+                           admm_data,
+                           lh_data,
+                           ps = [32],
+                           ns = map(x -> ceil(Int32, x), logspace(log10(20), log10(20000), 12)),
+                           #= ns = 2000, =#
+                           ds = [3],
+                           trials = 1,
+                           scales = [0.8],
+                           experiment_type = "binary",
+                           force_well_conditioned = false,
+                           prefix = "clusters_varn2",
+                           lambdas = flipdim(logspace(-4, 1, 50), 1),
+                           graph_type = "clusters"
+                          )
+
+  elseif task == "clusters_vard"
+    # Clusters, vard
+    combined_oracle_screen(
+                           admm_data,
+                           lh_data,
+                           ps = [32],
+                           #= ns = map(x -> ceil(Int32, x), logspace(log10(20), log10(20000), 12)), =#
+                           ns = 2000,
+                           ds = 1:10,
+                           trials = 1,
+                           scales = [0.8],
+                           experiment_type = "binary",
+                           force_well_conditioned = false,
+                           prefix = "clusters_vard",
+                           lambdas = flipdim(logspace(-4, 0, 50), 1),
+                           graph_type = "clusters"
+                          )
+
+  elseif task == "cycles_varp"
+    # Cycles, varp
+    combined_oracle_screen(
+                           admm_data,
+                           lh_data,
+                           ps = [20, 34, 48, 62],
+                           #= ns = map(x -> ceil(Int32, x), logspace(log10(20), log10(20000), 12)), =#
+                           vert = 5,
+                           horz = 5,
+                           ns = 2000,
+                           ds = [3],
+                           trials = 1,
+                           scales = [0.8],
+                           experiment_type = "binary",
+                           force_well_conditioned = false,
+                           prefix = "cycles_varp",
+                           lambdas = flipdim(logspace(-4, 0, 50), 1),
+                           graph_type = "overlap_cycles"
+                          )
+
+  elseif task == "clusters_varp"
+    # Clusters, varp
+    combined_oracle_screen(
+                           admm_data,
+                           lh_data,
+                           ps = 10:5:30,
+                           #= ns = map(x -> ceil(Int32, x), logspace(log10(20), log10(20000), 12)), =#
+                           #= vert = 5, =#
+                           #= horz = 5, =#
+                           ns = 2000,
+                           ds = [4],
+                           trials = 1,
+                           scales = [0.8],
+                           experiment_type = "binary",
+                           force_well_conditioned = false,
+                           prefix = "clusters_varp2",
+                           lambdas = flipdim(logspace(-4, 0, 50), 1),
+                           graph_type = "clusters"
+                          )
+
+  elseif task == "rand_missing"
+    # Random, missing exps
+    admm_data.low_rank = true
+    lh_data.low_rank = true
+
+    combined_oracle_screen(
+                           admm_data,
+                           lh_data,
+                           ps = [30],
+                           ns = 2000,
+                           ds = [5],
+                           trials = 1,
+                           scales = [0.8],
+                           experiment_type = "single",
+                           force_well_conditioned = false,
+                           prefix = "rand_missing",
+                           lambdas = flipdim(logspace(-4, 0, 50), 1),
+                           graph_type = "random",
+                           missing_exps = 1:29,
+                          )
+
+    admm_data.low_rank = true
+    lh_data.low_rank = true
+
+  elseif task == "rand_varn"
+    # Random, varn, TODO
+    combined_oracle_screen(
+                           admm_data,
+                           lh_data,
+                           ps = [30],
+                           #= ns = 2000, =#
+                           ns = map(x -> ceil(Int32, x), logspace(log10(20), log10(20000), 12)),
+                           ds = [4],
+                           trials = 1,
+                           scales = [0.8],
+                           experiment_type = "binary",
+                           force_well_conditioned = false,
+                           prefix = "rand_varn2",
+                           lambdas = flipdim(logspace(-4, 1, 50), 1),
+                           graph_type = "random"
+                          )
+
+  elseif task == "rand_vard"
+    # Random, vard
+    combined_oracle_screen(
+                           admm_data,
+                           lh_data,
+                           ps = [60],
+                           ns = 2000,
+                           #= ns = map(x -> ceil(Int32, x), logspace(log10(20), log10(20000), 12)), =#
+                           ds = 1:10,
+                           trials = 1,
+                           scales = [0.8/sqrt(10)],
+                           experiment_type = "binary",
+                           force_well_conditioned = false,
+                           prefix = "rand_vard_norm",
+                           lambdas = flipdim(logspace(-4, 1, 50), 1),
+                           graph_type = "random_norm"
+                          )
+
+  elseif task == "rand_vark"
+    # Random, vark
+    combined_oracle_screen(
+                           admm_data,
+                           lh_data,
+                           ps = [30],
+                           ns = 2000,
+                           #= ns = map(x -> ceil(Int32, x), logspace(log10(20), log10(20000), 12)), =#
+                           ds = 3,
+                           ks = [1:10],
+                           trials = 1,
+                           scales = [0.8/sqrt(10)],
+                           experiment_type = "bounded",
+                           force_well_conditioned = false,
+                           prefix = "rand_vare_norm",
+                           lambdas = flipdim(logspace(-4, 1, 50), 1),
+                           graph_type = "random_norm"
+                          )
+
+  elseif startswith(task, "semi_synth")
+
+  #=   # Cai paper =#
+    B = zeros(39, 39)
+    B[24,4] = -1.6206
+    B[24,5] = 0.1257
+    B[29,5] = 0.1925
+    B[24,22] = 0.1008
+    B[28,22] = 0.2940
+    B[29,22] = 0.2988
+    B[22,24] = 0.7366
+    B[29,28] = -0.0406
+    B[5,29] = 0.3378
+    B[22,29] = 0.8308
+    B[28,29] = -0.6262
+    B[22,32] = -0.0882
+    B[28,32] = 0.2409
+
+    d = maximum(sum(B .!= 0, 2))
+    (p, _) = size(B)
+
+    if task == "semi_synth_varn"
+      combined_oracle_screen(
+                             admm_data,
+                             lh_data,
+                             ps = [p],
+                             ds = [d],
+                             ns = map(x -> ceil(Int32, x), logspace(log10(20), log10(20000), 12)),
+                             trials = 1,
+                             experiment_type = "binary",
+                             force_well_conditioned = false,
+                             prefix = "semi_synth",
+                             lambdas = flipdim(logspace(-4, 1, 50), 1),
+                             graph_type = "given",
+                             B_fixed = copy(B)
+                            )
+
+    elseif task == "semi_synth_vare"
+    # Varying E
+      admm_data.low_rank = true
+      lh_data.low_rank = true
+
+      combined_oracle_screen(
+                             admm_data,
+                             lh_data,
+                             ps = [p],
+                             ds = [d],
+                             missing_exps = 0:38,
+                             ns = 2000 * 39,
+                             trials = 1,
+                             experiment_type = "single",
+                             force_well_conditioned = false,
+                             prefix = "semi_synth_missing",
+                             lambdas = flipdim(logspace(-4, 1, 50), 1),
+                             graph_type = "given",
+                             B_fixed = copy(B),
+                             constant_n = true
+                            )
+
+      admm_data.low_rank = false
+      lh_data.low_rank = false
+    end
+  end
+
+  toc()
+
 end

@@ -1,6 +1,42 @@
 # vim: ts=2 sw=2 et
 module CausalML
-export gen_b, gen_overlap_cycles, gen_clusters, PopulationData, EmpiricalData, lh, l1_wrap, mat2vec, vec2mat, min_vanilla_lh, VanillaLHData, min_constraint_lh, quic_old, quic, QuadraticPenaltyData, min_admm, ConstraintData, ADMMData, QuadraticPenaltyData_old, min_admm_old, ConstraintData_old, ADMMData_old, min_admm_oracle, llc, symmetrize!, min_constr_lh_oracle, combined_oracle, savevar, k_fold_split, min_admm_cv, min_constr_lh_cv, combined_cv
+export gen_b,
+  gen_overlap_cycles,
+  gen_clusters,
+  PopulationData,
+  EmpiricalData,
+  lh,
+  l1_wrap,
+  mat2vec,
+  vec2mat,
+  min_vanilla_lh,
+  VanillaLHData,
+  min_constraint_lh,
+  quic_old,
+  quic,
+  QuadraticPenaltyData,
+  min_admm,
+  ConstraintData,
+  ADMMData,
+  QuadraticPenaltyData_old,
+  min_admm_old,
+  ConstraintData_old,
+  ADMMData_old,
+  min_admm_oracle,
+  llc,
+  symmetrize!,
+  min_constr_lh_oracle,
+  combined_oracle,
+  savevar,
+  k_fold_split,
+  min_admm_cv,
+  min_constr_lh_cv,
+  combined_cv,
+  graph_lasso_admm,
+  soft_thresh,
+  reinit_admm,
+  reinit_quic_data,
+  reinit_lh_data
 
 #using Plots
 using Lbfgsb
@@ -128,7 +164,7 @@ function gen_clusters(p, d, std)
   B = zeros(p, p)
   for i = 1:num_clusters
     actual_size = min(cluster_size, p - (i-1)*cluster_size)
-    A = std*2*(rand(actual_size, actual_size) - 1)
+    A = std*(2*rand(actual_size, actual_size) - 1)
     for j = 1:actual_size
       A[j, j] = 0
     end
@@ -156,21 +192,27 @@ type PopulationData
   I
   E
 
-  function PopulationData(p, d, std, experiment_type; k = 1, graph_type = "random", horz = 1, vert = 1)
+  function PopulationData(p, d, std, experiment_type; k = 1, graph_type = "random", horz = 1, vert = 1, missing_exps = 0, B_fixed = [])
     ret = new()
     ret.p = p
     ret.d = d
     ret.std = std
     #= ret.B = gen_b(p, d, std/sqrt(d*p)) =#
-    if graph_type == "random"
+    if graph_type == "given"
+      ret.B = B_fixed
+    elseif graph_type == "random"
       ret.B = gen_b(p, d, std/d)
     elseif graph_type == "random_no_norm"
       ret.B = gen_b(p, d, std)
+    elseif graph_type == "random_norm"
+      ret.B = gen_b(p, d, std/sqrt(d))
     elseif graph_type == "overlap_cycles"
       ret.d = 3
       ret.B = gen_overlap_cycles(p, horz, vert, std/ret.d)
     elseif graph_type == "clusters"
       ret.B = gen_clusters(p, d, std/d)
+    elseif graph_type == "clusters_no_norm"
+      ret.B = gen_clusters(p, d, std)
     else
       error("Unknown graph type")
     end
@@ -291,6 +333,12 @@ type PopulationData
     else
       error("Unrecognized experiment_type")
     end
+
+    # Restrict for experiment deficiency
+    ret.Us = ret.Us[1:end-missing_exps]
+    ret.Us_ind = ret.Us_ind[1:end-missing_exps]
+    ret.Js_ind = ret.Js_ind[1:end-missing_exps]
+    
     ret.E = length(ret.Us)
 
     # Generate concentration and covariance matrices
@@ -326,7 +374,7 @@ type EmpiricalData
   sigmas_emp
   Xs
 
-  function EmpiricalData(pop_data, n; store_samples = false, Xs = [])
+  function EmpiricalData(pop_data, n; store_samples = false, Xs = [], constant_n = false)
     ret = new()
     ret.p = pop_data.p
     ret.E = pop_data.E
@@ -566,45 +614,83 @@ end
 
 function VanillaLHData(p, lambda, B0)
   return VanillaLHData(lambda, B0,
-                       zeros(p, p), zeros(p, p),
-                       zeros(p, p),
+                       zeros(p, p), # B,
+                       zeros(p, p), # Ainv
                        zeros(p, p), # Ainve
-                       zeros(p, p),
-                       [], [], [],
-                       LinAlg.Cholesky(zeros(p,p), :U),
-                       zeros(p,p),
-                       zeros(p,p),
-                       LinAlg.Cholesky(zeros(p,p), :U),
-                       zeros(p,p),
-                       zeros(p,p),
-                       zeros(p),
-                       zeros(p),
-                       zeros(p, p),
-                       zeros(p, p),
-                       zeros(p, p),
-                       zeros(p, p),
-                       true,
-                       zeros(p*(p-1)),
-                       zeros(p*(p-1)),
-                       zeros(p*(p-1)),
-                       zeros(p*(p-1)),
-                       ones(p*(p-1)),
-                       zeros(2*p*(p-1) + 1),
-                       fill(Inf, 2*p*(p-1)+1),
-                       zeros(2*p*(p-1)+1),
-                       zeros(2*p*(p-1)+1),
+                       zeros(p, p), # Ainv2
+                       zeros(p, p), # Ainv2e
+                       [], # Breds
+                       [], # Bredst
+                       [], # Bmuldiff
+                       LinAlg.Cholesky(zeros(p,p), :U), # Cholfact
+                       zeros(p,p), # CholfactFactor
+                       zeros(p,p), # CholfactFactorT
+                       LinAlg.Cholesky(zeros(p,p), :U), # Cholfacte
+                       zeros(p,p), # CholfacteFactor
+                       zeros(p,p), # CholfacteFactorT
+                       zeros(p), # update_vec
+                       zeros(p), # downdate_vec
+                       zeros(p, p), # diff
+                       zeros(p, p), # diff_sum
+                       zeros(p, p), # Gmat
+                       zeros(p, p), # Gmat_sum
+                       true, # initialize_array
+                       zeros(p*(p-1)), # x_plus
+                       zeros(p*(p-1)), # x_minus
+                       zeros(p*(p-1)), # x_total
+                       zeros(p*(p-1)), # grad_f
+                       ones(p*(p-1)), # ones
+                       zeros(2*p*(p-1) + 1), # lb_aug
+                       fill(Inf, 2*p*(p-1)+1), # ub_aug
+                       zeros(2*p*(p-1)+1), # x_old
+                       zeros(2*p*(p-1)+1), # x_new
                        1e-6, # final_tol
                        0.5, # gamma
                        1.5, # tau
                        zeros(p*(p-1)), # aug_diff
-                       zeros(p*(p-1)),
-                       Inf,
+                       zeros(p*(p-1)), # x_base
+                       Inf, # upper_bound
                        false, # low_rank
                        0.0, # s0
                        0.0, # dual
                        true, # use_constraint
                        true, # continuation
                       )
+end
+
+function reinit_lh_data(lh_data, p)
+  lists = [:Breds, :Bredst, :Bmuldiff]
+  for list in lists
+    setfield!(lh_data, list, Array{Array{Float64, 2}, 1}())
+  end
+
+  mats = [:Ainv, :Ainve, :Ainv2, :Ainv2e, :CholfactFactor, :CholfactFactorT,
+          :CholfacteFactor, :CholfacteFactorT,
+          :diff, :diff_sum, :Gmat, :Gmat_sum, :B,
+         ]
+
+  for mat in mats
+    setfield!(lh_data, mat, zeros(p, p))
+  end
+
+  lh_data.ones = ones(p * (p-1))
+  lh_data.lb_aug = zeros(2 * p * (p-1) + 1)
+  lh_data.ub_aug = fill(Inf, 2*p*(p-1)+1)
+  pvecs = [:update_vec, :downdate_vec]
+  big_vecs = [:x_old, :x_new]
+  square_vecs = [:x_plus, :x_minus, :x_total, :grad_f,
+                 :aug_diff, :x_base]
+  for vec in pvecs
+    setfield!(lh_data, vec, zeros(p))
+  end
+  for vec in square_vecs
+    setfield!(lh_data, vec, zeros(p*(p-1)))
+  end
+  for vec in big_vecs
+    setfield!(lh_data, vec, zeros(2 * p * (p-1) + 1))
+  end
+
+  lh_data.initialize_array = true
 end
 
 # Set up functions for lbfgsb
@@ -863,6 +949,7 @@ function min_constraint_lh(emp_data,
   start = mat2vec(data.B0, emp_data)
   start = [start; -start]
   start[start .< 0] = 0
+  #= println(start) =#
 
   converged = false
   dim = p * (p-1)
@@ -920,13 +1007,15 @@ function min_constraint_lh(emp_data,
   #= x_old = zeros(dim+1) =#
   #= fill!(data.x_old, 0.0) =#
   copy!(view(data.x_old, 1:2*dim), start)
-  data.x_old[2*dim+1] = data.s
+  data.x_old[2*dim+1] = vecnorm(data.x_old[1:dim] - data.x_old[dim+1:2*dim] - x_base)^2
+  #= data.x_old[2*dim+1] = 0.0 =#
   copy!(data.aug_diff, view(data.x_old, 1:dim))
   BLAS.axpy!(-1.0, view(data.x_old, dim+1:2*dim), data.aug_diff)
   BLAS.axpy!(-1.0, x_base, data.aug_diff)
   norm_old = vecnorm(data.aug_diff)^2
   constr_old = data.x_old[2*dim+1] - norm_old
   dual = data.dual
+  dual = 0.0
   rho = 1.0
   #= x_new = similar(x_old) =#
   println("s = ", data.x_old[2*dim+1], ", dual = ", dual)
@@ -1237,12 +1326,20 @@ type QuadraticPenaltyData
   uvec::Array{Float64,1}
   hard_thresh::Float64 # Cut-off for each major iteration
   max_iterations::Int64 # maximum outer iterations
+
+  kappa::Float64 # step size for admm
+  dual_balancing::Bool # primal dual balancing for admm
+  alpha::Float64 # Overrelaxation parameter for admm
+  balance_mult::Float64 # Multiplier for balancing
+  balance_thresh::Float64 # Threshold for balancing
+  tol_rel::Float64 # Relative tolerance
+  
 end
 
 function QuadraticPenaltyData(p, lambda, inner_mult, inner_min_iterations, inner_max_iterations,
                               theta0,
-                             tol, inner_tol, relaxation, beta, eps,
-                             print_stats, hard_thresh, max_iterations
+                              tol, inner_tol, relaxation, beta, eps,
+                              print_stats, hard_thresh, max_iterations
                             )
   return QuadraticPenaltyData(
                               # For quic
@@ -1275,7 +1372,27 @@ function QuadraticPenaltyData(p, lambda, inner_mult, inner_min_iterations, inner
                               zeros(p), # uvec
                               hard_thresh,
                               max_iterations,
+
+                              1.0, # kappa
+                              true, # residual balancing
+                              1.5, # alpha
+                              1.2, # balance_mult
+                              30.0, # balance_thresh
+                              1e-4, # tol_rel
                              )
+end
+
+function reinit_quic_data(quic_data, p)
+  mats = [:W, :Wu, :Wt, :theta, :thetaT, :theta_prime, :theta_primeT,
+          :D, :D_old, :U, :Ut, :G, :Gmin, :theta_new, :diff]
+  vecs = [:uvec]
+
+  for mat in mats
+    setfield!(quic_data, mat, zeros(p, p))
+  end
+  for vec in vecs
+    setfield!(quic_data, vec, zeros(p))
+  end
 end
 
 function QuadraticPenaltyData(p)
@@ -1623,19 +1740,20 @@ function quic(emp_data,
       end
       #= l1_new = vecnorm(data.theta + data.D, 1) =#
 
-      copy!(data.diff, data.theta)
-      BLAS.axpy!(1.0, data.D, data.diff)
-      l1_new = vecnorm(data.diff, 1)
-      comparison = l1_new - l1_old
-      comparison *= lambda
-      #= comparison += sum(data.G .* data.D) =#
-      comparison += BLAS.dot(p^2, data.G, 1, data.D, 1)
-      comparison *= relaxation
+      # Slow?
+      #= copy!(data.diff, data.theta) =#
+      #= BLAS.axpy!(1.0, data.D, data.diff) =#
+      #= l1_new = vecnorm(data.diff, 1) =#
+      #= comparison = l1_new - l1_old =#
+      #= comparison *= lambda =#
+      #= #1= comparison += sum(data.G .* data.D) =1# =#
+      #= comparison += BLAS.dot(p^2, data.G, 1, data.D, 1) =#
+      #= comparison *= relaxation =#
 
       #= data.diff = data.theta + data.D =#
-      comparison = relaxation * (sum(data.G .* data.D) + lambda * (vecnorm(data.diff[offdiag_idx], 1) - vecnorm(data.theta[offdiag_idx], 1)))
+      #= comparison = relaxation * (sum(data.G .* data.D) + lambda * (vecnorm(data.diff[offdiag_idx], 1) - vecnorm(data.theta[offdiag_idx], 1))) =#
       #= comparison = relaxation * (sum(data.G .* data.D) + lambda * (vecnorm(data.theta + data.D, 1) - vecnorm(data.theta, 1))) =#
-      descent_step = comparison < 0
+      #= descent_step = comparison < 0 =#
       #= if print_stats =#
       #=   println("descent = ", descent_step) =#
       #= end =#
@@ -1732,6 +1850,8 @@ function quic(emp_data,
     # Compute self-concordant step size
     #= eps_term = sqrt(trace(data.W * data.D * data.W * data.D) + rho * sum(data.D)^2) =#
     #= eps_term = sqrt(trace(data.W * data.D * data.W * data.D)) =#
+
+    # Manual
     eps_term = 0.0
     transpose!(data.Ut, data.U)
     @simd for i = 1:p
@@ -1763,6 +1883,16 @@ function quic(emp_data,
         tau = beta * tau
         continue
       end
+
+      # Check for singular matrix
+      for i = 1:p
+        if data.W[i, i] < 1e-20
+          posdef = false
+          tau = beta * tau
+          break
+        end
+      end
+
     end
 
     if print_stats
@@ -1843,7 +1973,8 @@ function quic(emp_data,
     #= theta[:] = copy(theta_new) =#
     copy!(data.theta, data.theta_new)
     for i = 1:p
-      for j = setdiff(1:p, i)
+      #= for j = setdiff(1:p, i) =#
+      for j = 1:p
         data.theta[i,j] = hard_thresh(data.theta[i,j], data.hard_thresh)
       end
     end
@@ -2542,6 +2673,7 @@ function constr_least_sq(x, g, vars, duals, rho, emp_data, data::ConstraintData,
 end
 
 type ADMMData
+  p
   quic_data
   constr_data
   low_rank
@@ -2562,10 +2694,14 @@ type ADMMData
   T::Int64 # How often to run BB update
   eps_cor::Float64 # Safeguarding threshold for BB update
   max_iterations::Int64 # maximum number of iterations
+  graph_lasso_method::String # method to use for solving the graphical lasso
+                             # either "quic" or "admm"
+  warm_start # Warm start the iteration over lambda
 end
 
-function ADMMData(emp_data, constr_data, lambda)
-  data = ADMMData(QuadraticPenaltyData(emp_data.p), # quic_data
+function ADMMData(p, E, constr_data, lambda)
+  data = ADMMData(p,
+                  QuadraticPenaltyData(p), # quic_data
                   constr_data, # constr_data
                   false, # low_rank
                   1.0, # rho
@@ -2576,19 +2712,32 @@ function ADMMData(emp_data, constr_data, lambda)
                   false, # tighten
                   5.0, # mu
                   1.5, # tau
-                  zeros(emp_data.p, emp_data.p), # B
-                  zeros(emp_data.p, emp_data.p), # theta_prime
+                  zeros(p, p), # B
+                  zeros(p, p), # theta_prime
                   #= zeros(emp_data.p, emp_data.p), # theta =#
-                  [zeros(emp_data.p, emp_data.p) for e = 1:emp_data.E], # Ainv2s
+                  [zeros(p, p) for e = 1:E], # Ainv2s
                   zeros(p, p), # B0 
-                  [zeros(emp_data.p, emp_data.p) for e = 1:emp_data.E], # duals
+                  [zeros(p, p) for e = 1:E], # duals
                   3, # T
                   0.2, # eps_cor
                   2000, # max_iterations
+                  "admm", # graph_lasso_method
+                  true, # warm_start
                  )
   data.quic_data.lambda = lambda
   return data
 end
+
+function reinit_admm(admm_data, p, E)
+  admm_data.p = p
+  admm_data.B = zeros(p, p)
+  admm_data.theta_prime = zeros(p, p)
+  admm_data.B0 = zeros(p, p)
+  admm_data.Ainv2s = [zeros(p, p) for e = 1:E]
+  admm_data.duals = [zeros(p, p) for e = 1:E]
+  admm_data.constr_data = ConstraintData(p)
+end
+
 
 function compute_Ainv2s(emp_data, admm_data, vars; low_rank = false)
   constr_data = admm_data.constr_data
@@ -2669,7 +2818,7 @@ function min_admm(emp_data, admm_data)
   B0 = admm_data.B0
   duals = admm_data.duals
 
-  function solve_ml_quic!(vars, duals, rho, sigmas, e)
+  function solve_ml_graph_lasso!(vars, duals, rho, sigmas, e)
     #= println("Running quic for ", e) =#
     vec2mat(vars[end], emp_data, inplace = B)
     copy!(theta_prime, admm_data.Ainv2s[e])
@@ -2688,8 +2837,13 @@ function min_admm(emp_data, admm_data)
     #= println(theta_prime) =#
     #= println(rho) =#
     #= println(qu_data) =#
-    copy!(vars[e], quic(emp_data, qu_data, sigmas[e],
+    if admm_data.graph_lasso_method == "quic"
+      copy!(vars[e], quic(emp_data, qu_data, sigmas[e],
                         theta_prime = theta_prime, rho = rho)[1])
+    elseif admm_data.graph_lasso_method == "admm"
+      copy!(vars[e], graph_lasso_admm(emp_data, qu_data, sigmas[e],
+                        theta_prime = theta_prime, rho = rho)[1])
+    end
     #= println("Diff: ", vecnorm(var_old - vars[e])) =#
     #= copy!(vars[e], theta) =#
   end
@@ -2750,7 +2904,7 @@ function min_admm(emp_data, admm_data)
   compute_grads_h = []
   compute_grads_g = []
   for e = 1:E
-    push!(solvers, (vars, duals, rho) -> solve_ml_quic!(vars, duals, rho, sigmas_emp, e))
+    push!(solvers, (vars, duals, rho) -> solve_ml_graph_lasso!(vars, duals, rho, sigmas_emp, e))
     #= push!(compute_grads_h, (g, vars) -> compute_grad_h!(g, vars, e)) =#
     #= push!(compute_grads_g, (g, vars) -> compute_grad_g!(g, vars, e)) =#
   end
@@ -2796,18 +2950,27 @@ function min_admm_oracle(pop_data, emp_data, admm_data, lambdas)
   Bs = []
   B_admm = copy(admm_data.B0)
   status = zeros(length(lambdas))
+  last_index = 1
   for i = 1:length(lambdas)
     println("lambda = ", lambdas[i])
-    admm_data.B0 = copy(B_admm)
+    if admm_data.warm_start
+      admm_data.B0 = copy(B_admm)
+    else
+      admm_data.B0 = zeros(admm_data.p, admm_data.p)
+    end
     admm_data.quic_data.lambda = lambdas[i]
     result = min_admm(emp_data, admm_data)
     B_admm = copy(result[1])
     status[i] = result[2]
     push!(Bs, B_admm)
     errors[i] = vecnorm(B_admm - pop_data.B)
+    last_index = i
+    if i > 1 && errors[i] > errors[i-1]
+      break
+    end
   end
 
-  (err, ind) = findmin(errors)
+  (err, ind) = findmin(errors[1:last_index])
   return (Bs[ind], err, lambdas[ind], errors, status)
 end
 
@@ -2815,11 +2978,13 @@ function min_constr_lh_oracle(pop_data, emp_data, lh_data, lambdas)
   errors = zeros(length(lambdas))
   Bs = []
   B_lh = copy(lh_data.B0)
+  B0_old = copy(lh_data.B0)
   for i = 1:length(lambdas)
     lh_data.lambda = lambdas[i]
     if lh_data.continuation
       lh_data.B0 = copy(B_lh)
     end
+    lh_data.dual = 0.0
     if lh_data.use_constraint
       B_lh = copy(min_constraint_lh(emp_data, lh_data))
     else
@@ -2830,6 +2995,7 @@ function min_constr_lh_oracle(pop_data, emp_data, lh_data, lambdas)
   end
 
   (err, ind) = findmin(errors)
+  lh_data.B0 = B0_old
   return (Bs[ind], err, lambdas[ind], errors)
 end
 
@@ -2878,9 +3044,10 @@ function min_admm_cv(pop_data, emp_data, admm_data, lambdas, k)
   return (B, lh_val, lambdas[ind], lhs)
 end
 
-function min_constr_lh_cv(pop_data, emp_data, lh_data, lambdas, k)
-  lhs = zeros(length(lambdas))
+function min_constr_lh_cv(pop_data, emp_data, lh_data, lambdas, k, constraints = [lh_data.upper_bound])
+  lhs = zeros(length(constraints), length(lambdas))
   B_lhs = [copy(lh_data.B0) for i =1:k]
+  B_lhs = repmat(B_lhs', length(constraints), 1)
   B0_old = copy(lh_data.B0)
 
   emp_datas_train = []
@@ -2893,35 +3060,41 @@ function min_constr_lh_cv(pop_data, emp_data, lh_data, lambdas, k)
     push!(emp_datas_test, emp_test)
   end
 
-  for i = 1:length(lambdas)
-    println("lambda = ", lambdas[i])
-    lh_val = 0
-    lh_data.lambda = lambdas[i]
-    for j = 1:k
-      if lh_data.continuation
-        lh_data.B0 = copy(B_lhs[j])
+  for c = 1:length(constraints)
+    lh_data.B0 = copy(B0_old)
+    for i = 1:length(lambdas)
+      println("constraint = ", constraints[c], ", [lambda = ", lambdas[i])
+      lh_val = 0
+      lh_data.lambda = lambdas[i]
+      lh_data.upper_bound = constraints[c]
+      for j = 1:k
+        if lh_data.continuation
+          lh_data.B0 = copy(B_lhs[c, j])
+        end
+        if lh_data.use_constraint
+          B_lhs[c, j] = copy(min_constraint_lh(emp_datas_train[j], lh_data))
+        else
+          B_lh[c, j] = copy(min_vanilla_lh(emp_data_datas_train[j], lh_data))
+        end
+        lh_val += lh(emp_datas_test[j], lh_data, mat2vec(B_lhs[j], emp_data, reduced = true), [])
       end
-      if lh_data.use_constraint
-        B_lhs[j] = copy(min_constraint_lh(emp_datas_train[j], lh_data))
-      else
-        B_lh[j] = copy(min_vanilla_lh(emp_data_datas_train[j], lh_data))
-      end
-      lh_val += lh(emp_datas_test[j], lh_data, mat2vec(B_lhs[j], emp_data, reduced = true), [])
+
+      lhs[c, i] = lh_val
     end
-    lhs[i] = lh_val
   end
 
-
   (lh_val, ind) = findmin(lhs)
+  (c, i) = ind2sub(size(lhs), ind)
   lh_data.B0 = B0_old
-  lh_data.lambda = lambdas[ind]
+  lh_data.lambda = lambdas[i]
+  lh_data.upper_bound = constraints[c]
   if lh_data.use_constraint
     B = copy(min_constraint_lh(emp_data, lh_data))
   else
     B = copy(min_vanilla_lh(emp_data_data, lh_data))
   end
 
-  return (B, lh_val, lambdas[ind], lhs)
+  return (B, lh_val, lambdas[i], constraints[c], lhs)
 end
 
 function combined_cv(pop_data, emp_data, admm_data, lh_data, lambdas, k, c)
@@ -2968,7 +3141,7 @@ function llc(pop_data, emp_data, lambdas)
       end
     end
     #= b = T \ t =#
-    path = fit(LassoPath, T, t, λ = lambdas)
+    path = fit(LassoPath, T, t, λ = lambdas, maxncoef = size(T, 2))
     all_but_u = setdiff(1:p, u)
     for ind in 1:length(lambdas)
       copy!(view(Bs[ind], u, all_but_u), view(path.coefs, :, ind))
@@ -2986,6 +3159,108 @@ function llc(pop_data, emp_data, lambdas)
   #= println(path.λ[ind]) =#
 
   return (Bs[ind], err, lambdas[ind], errors)
+end
+
+function graph_lasso_admm(emp_data,
+               quic_data,
+               sigma::Array{Float64, 2};
+               theta_prime::Array{Float64, 2} = eye(emp_data.p),
+               rho::Float64 = 0.0,
+               #= lambda::Float64 = 1e-3, =#
+               #= inner_mult::Float64 = 1/3, =#
+               #= theta0::Array{Float64,2} = eye(Float64, emp_data.p), =#
+               #= tol::Float64 = 1e-4, =#
+               #= inner_tol::Float64 = 1e-8, =#
+               #= relaxation::Float64 = 0.2, =#
+               #= beta::Float64 = 0.9, =#
+               g::Array{Float64, 2} = Array{Float64,2}(0,0),
+               #= print_stats = false =#
+             )
+
+  # Shortcuts
+  data = quic_data
+  lambda = data.lambda
+  theta0 = data.theta0
+  theta = data.theta
+  print_stats = data.print_stats
+
+  # Constants
+  max_iter = data.max_iterations
+  kappa = data.kappa
+  alpha = data.alpha
+  #= tol_abs = 1e-9 =#
+  #= tol_rel = 1e-9 =#
+  tol_abs = data.tol
+  tol_rel = data.tol
+
+  (p1, p2) = size(sigma)
+  if p1 != p2
+    throw(ArgumentError("sigma needs to be a square matrix"))
+  end
+  p = p1
+
+  # Z = theta
+  # X = X
+  # U = U
+  U = zeros(p, p)
+  copy!(theta, theta0)
+
+  k = 1
+  while k <= max_iter
+    # X update
+    (q, V) = eig(kappa * (theta - U) + rho * theta_prime - sigma)
+    kappa2 = kappa + rho
+    q = (q + sqrt(q.^2 + 4 * kappa2))./(2 * kappa2)
+    X = V * diagm(q) * V'
+
+    # theta update
+    theta_old = copy(theta)
+    X_hat = alpha * X + (1 - alpha) * theta_old
+    theta = soft_thresh(X_hat + U, lambda / kappa)
+
+    # U update
+    U += X_hat - theta
+
+    # termination checks
+    primal_norm = vecnorm(X - theta)
+    dual_norm = vecnorm(kappa * (theta - theta_old))
+
+    tol_primal = p * tol_abs + tol_rel * max(vecnorm(X), vecnorm(theta))
+    tol_dual = p * tol_abs + tol_rel * vecnorm(kappa * U)
+
+    # Debug output
+    if print_stats
+      println("Iteraton ", k)
+      println("Primal res = ", primal_norm, ", tol = ", tol_primal)
+      println("Dual res = ", dual_norm, ", tol = ", tol_dual)
+    end
+
+    # Stopping criterion
+    if primal_norm < tol_primal && dual_norm < tol_dual
+      break
+    end
+
+    # Dual balancing
+    if data.dual_balancing && mod(k, 2) == 0
+      if primal_norm > data.balance_thresh * dual_norm
+        kappa *= data.balance_mult
+      elseif dual_norm > data.balance_thresh * primal_norm
+        kappa /= data.balance_mult
+      end
+      if print_stats
+        println("kappa = ", kappa)
+      end
+    end
+
+    # Counter
+    k += 1
+  end
+
+  status = (k > max_iter)? 1 : 0
+
+  #= println("Iterations in graphical lasso: ", k) =#
+
+  return (theta, status)
 end
 
 end
