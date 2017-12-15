@@ -5,11 +5,11 @@ import datetime
 import time
 
 tasks = [("semi_synth_vare", 1)]
-last_start = 14
-last_minute = 5
+last_start = 7
+last_minute = 0
 cur_time = datetime.datetime.now()
-cut_off = cur_time
-# cut_off = cur_time + datetime.timedelta(days = 1)
+# cut_off = cur_time
+cut_off = cur_time + datetime.timedelta(days = 1)
 cut_off = cut_off.replace(hour = last_start, minute = last_minute, second = 0)
 # cut_off = cur_time.replace(minute = 57)
 
