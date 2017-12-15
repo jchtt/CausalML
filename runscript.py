@@ -18,14 +18,14 @@ task_index = 0
 task = tasks[task_index][0]
 end_index = tasks[task_index][1]
 
-while cur_time < cut_off and start_index <= end_index and task_index < length(tasks):
+while cur_time < cut_off and start_index <= end_index and task_index < len(tasks):
     os.system("julia5 CausalMLTest.jl {} {} &> ./logs/log_{}.txt".format(start_index, task, start_index))
     # os.system("touch test/{}".format(start_index))
     time.sleep(1)
 
     start_index += 1
     if start_index > end_index:
-        if task_index < length(tasks) - 1:
+        if task_index < len(tasks) - 1:
             task_index += 1
             task = tasks[task_index][0]
             end_index = tasks[task_index][1]
