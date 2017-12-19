@@ -6,11 +6,17 @@ import time
 import pathlib
 
 # tasks = [("semi_synth_vare", 1)]
+# tasks = [
+#         ("clusters_vard_norm", 32),
+#         ("clusters_varp", 32),
+#         ("cycles_varp", 32),
+#         ("cycles_varn", 32),
+#         ]
 tasks = [
-        ("clusters_vard_norm", 32),
-        ("clusters_varp", 32),
-        ("cycles_varp", 32),
-        ("cycles_varn", 32),
+        ("clusters_varn", 32),
+        ("rand_missing", 32),
+        ("rand_vard_norm", 32),
+        ("rand_vark", 32),
         ]
 last_start = 7
 last_minute = 0

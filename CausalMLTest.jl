@@ -1098,20 +1098,21 @@ module CausalMLTest
                            admm_data,
                            lh_data,
                            ps = [30],
-                           ns = 2000,
+                           ns = 2000 * 30,
                            ds = [5],
                            trials = 1,
                            scales = [0.8],
                            experiment_type = "single",
                            force_well_conditioned = false,
                            prefix = "rand_missing",
-                           lambdas = flipdim(logspace(-4, 0, 50), 1),
+                           lambdas = flipdim(logspace(-4, 1, 50), 1),
                            graph_type = "random",
-                           missing_exps = 1:29,
+                           missing_exps = 0:29,
+                           constant_n = true
                           )
 
-    admm_data.low_rank = true
-    lh_data.low_rank = true
+    admm_data.low_rank = false
+    lh_data.low_rank = false
 
   elseif task == "rand_varn"
     # Random, varn, TODO
@@ -1131,7 +1132,7 @@ module CausalMLTest
                            graph_type = "random"
                           )
 
-  elseif task == "rand_vard"
+  elseif task == "rand_vard_norm"
     # Random, vard
     combined_oracle_screen(
                            admm_data,
@@ -1155,17 +1156,18 @@ module CausalMLTest
                            admm_data,
                            lh_data,
                            ps = [30],
-                           ns = 2000,
+                           ns = 2000 * 30,
                            #= ns = map(x -> ceil(Int32, x), logspace(log10(20), log10(20000), 12)), =#
                            ds = 3,
                            ks = [1:10],
                            trials = 1,
-                           scales = [0.8/sqrt(10)],
+                           scales = [0.8/sqrt(3)],
                            experiment_type = "bounded",
                            force_well_conditioned = false,
                            prefix = "rand_vare_norm",
                            lambdas = flipdim(logspace(-4, 1, 50), 1),
                            graph_type = "random_norm"
+                           constant_n = true
                           )
 
   elseif startswith(task, "semi_synth")
