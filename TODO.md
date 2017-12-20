@@ -1,13 +1,30 @@
-# Clusters
-## Varn [!run]
-## Vard_norm [!eval]
-## Varp (n constant) [!eval]
+# Runs
+## Clusters
+### Varn [!run]
+### Vard_norm [!eval]
+### Varp (n constant) [!eval]
 
-# Cycles
-## Varp (n constant) [!eval]
-## Varn [!eval]
+## Cycles
+### Varp (n constant) [!eval]
+### Varn [!eval]
 
-# Random
-## Missing exps (n constant) [!run]
-## Vard_norm [!run]
-## Vare (n constant) [!run]
+## Random
+### Missing exps (n constant) [!run]
+### Vard_norm [!run]
+### Vare (n constant) [!run]
+
+# Eval
+## Clusters
+### Varn
+### Vard_norm
+### Varp (n constant)
+
+## Cycles
+### Varp (n constant)
+### Varn [!eval]
+
+## Random
+### Missing exps (n constant)
+### Vard_norm
+### Vare (n constant)
+

@@ -1166,7 +1166,7 @@ module CausalMLTest
                            force_well_conditioned = false,
                            prefix = "rand_vare_norm",
                            lambdas = flipdim(logspace(-4, 1, 50), 1),
-                           graph_type = "random_norm"
+                           graph_type = "random_norm",
                            constant_n = true
                           )
 
