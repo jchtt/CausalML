@@ -2699,6 +2699,7 @@ type ADMMData
   graph_lasso_method::String # method to use for solving the graphical lasso
                              # either "quic" or "admm"
   warm_start # Warm start the iteration over lambda
+  early_stop # Stop CV earlier
 end
 
 function ADMMData(p, E, constr_data, lambda)
@@ -2725,6 +2726,7 @@ function ADMMData(p, E, constr_data, lambda)
                   2000, # max_iterations
                   "admm", # graph_lasso_method
                   true, # warm_start
+                  true, # early_stop
                  )
   data.quic_data.lambda = lambda
   return data
@@ -2967,7 +2969,7 @@ function min_admm_oracle(pop_data, emp_data, admm_data, lambdas)
     push!(Bs, B_admm)
     errors[i] = vecnorm(B_admm - pop_data.B)
     last_index = i
-    if i > 1 && errors[i] > errors[i-1]
+    if admm_data.early_stop && i > 1 && errors[i] > errors[i-1]
       break
     end
   end

@@ -1029,6 +1029,7 @@ module CausalMLTest
 
   elseif task == "clusters_varp"
     # Clusters, varp
+    admm_data.early_stop = false
     combined_oracle_screen(
                            admm_data,
                            lh_data,
@@ -1047,6 +1048,7 @@ module CausalMLTest
                            graph_type = "clusters",
                            constant_n = true
                           )
+    admm_data.early_stop = true
 
   elseif task == "cycles_varp"
     # Cycles, varp
@@ -1083,7 +1085,7 @@ module CausalMLTest
                            scales = [0.8],
                            experiment_type = "binary",
                            force_well_conditioned = false,
-                           prefix = "cycles_varp",
+                           prefix = "cycles_varn",
                            lambdas = flipdim(logspace(-4, 1, 50), 1),
                            graph_type = "overlap_cycles"
                           )
@@ -1156,9 +1158,9 @@ module CausalMLTest
                            admm_data,
                            lh_data,
                            ps = [30],
-                           ns = 2000 * 30,
+                           ns = [2000 * 30],
                            #= ns = map(x -> ceil(Int32, x), logspace(log10(20), log10(20000), 12)), =#
-                           ds = 3,
+                           ds = [3],
                            ks = [1:10],
                            trials = 1,
                            scales = [0.8/sqrt(3)],
