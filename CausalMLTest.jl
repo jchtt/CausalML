@@ -1161,7 +1161,7 @@ module CausalMLTest
                            ns = [2000 * 30],
                            #= ns = map(x -> ceil(Int32, x), logspace(log10(20), log10(20000), 12)), =#
                            ds = [3],
-                           ks = [1:10],
+                           ks = 1:10,
                            trials = 1,
                            scales = [0.8/sqrt(3)],
                            experiment_type = "bounded",
