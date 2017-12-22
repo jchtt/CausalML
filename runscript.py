@@ -14,7 +14,7 @@ tasks = [
         # ("clusters_varn", 32),
         # ("rand_missing", 32),
         # ("rand_vard_norm", 32),
-        ("rand_vark", 1),
+        ("rand_vark", 32),
         ]
 last_start = 7
 last_minute = 0
