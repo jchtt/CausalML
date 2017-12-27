@@ -19,6 +19,9 @@ tasks = [
         # ("clusters_missing", 1),
         # ("cycles_missing", 1),
         # ("rand_varn", 1),
+        # ("clusters_missing", 32),
+        # ("cycles_missing", 32),
+        # ("rand_varn", 32),
         ("rand_varp", 32),
         ]
 last_start = 7
