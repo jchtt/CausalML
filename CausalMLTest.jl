@@ -1050,6 +1050,31 @@ module CausalMLTest
                           )
     admm_data.early_stop = true
 
+  elseif task == "clusters_missing"
+    # Random, missing exps
+    admm_data.low_rank = true
+    lh_data.low_rank = true
+
+    combined_oracle_screen(
+                           admm_data,
+                           lh_data,
+                           ps = [32],
+                           ns = 2000 * 32,
+                           ds = [3],
+                           trials = 1,
+                           scales = [0.8],
+                           experiment_type = "single",
+                           force_well_conditioned = false,
+                           prefix = "clusters_missing",
+                           lambdas = flipdim(logspace(-4, 1, 50), 1),
+                           graph_type = "clusters",
+                           missing_exps = 0:31,
+                           constant_n = true
+                          )
+
+    admm_data.low_rank = false
+    lh_data.low_rank = false
+
   elseif task == "cycles_varp"
     # Cycles, varp
     combined_oracle_screen(
@@ -1090,6 +1115,32 @@ module CausalMLTest
                            graph_type = "overlap_cycles"
                           )
 
+  elseif task == "cycles_missing"
+    # Random, missing exps
+    admm_data.low_rank = true
+    lh_data.low_rank = true
+
+    combined_oracle_screen(
+                           admm_data,
+                           lh_data,
+                           ps = [34],
+                           vert = 5,
+                           horz = 5,
+                           ns = 2000 * 34,
+                           ds = [3],
+                           trials = 1,
+                           scales = [0.8],
+                           experiment_type = "single",
+                           force_well_conditioned = false,
+                           prefix = "cycles_missing",
+                           lambdas = flipdim(logspace(-4, 1, 50), 1),
+                           graph_type = "clusters",
+                           missing_exps = 0:33,
+                           constant_n = true
+                          )
+
+    admm_data.low_rank = false
+    lh_data.low_rank = false
 
   elseif task == "rand_missing"
     # Random, missing exps
@@ -1117,7 +1168,7 @@ module CausalMLTest
     lh_data.low_rank = false
 
   elseif task == "rand_varn"
-    # Random, varn, TODO
+    # Random, varn
     combined_oracle_screen(
                            admm_data,
                            lh_data,
@@ -1129,10 +1180,33 @@ module CausalMLTest
                            scales = [0.8],
                            experiment_type = "binary",
                            force_well_conditioned = false,
-                           prefix = "rand_varn2",
+                           prefix = "rand_varn",
                            lambdas = flipdim(logspace(-4, 1, 50), 1),
                            graph_type = "random"
                           )
+
+  elseif task == "rand_varp"
+    # Random, varp
+    admm_data.early_stop = false
+    combined_oracle_screen(
+                           admm_data,
+                           lh_data,
+                           ps = 10:5:30,
+                           #= ns = map(x -> ceil(Int32, x), logspace(log10(20), log10(20000), 12)), =#
+                           #= vert = 5, =#
+                           #= horz = 5, =#
+                           ns = ceil(Int, 2 * log2(30) * 2000),
+                           ds = [4],
+                           trials = 1,
+                           scales = [0.8],
+                           experiment_type = "binary",
+                           force_well_conditioned = false,
+                           prefix = "rand_varp_noearly",
+                           lambdas = flipdim(logspace(-4, 1, 50), 1),
+                           graph_type = "random",
+                           constant_n = true
+                          )
+    admm_data.early_stop = true
 
   elseif task == "rand_vard_norm"
     # Random, vard
