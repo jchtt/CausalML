@@ -3101,13 +3101,13 @@ function min_constr_lh_cv(pop_data, emp_data, lh_data, lambdas, k, constraints =
   return (B, lh_val, lambdas[i], constraints[c], lhs)
 end
 
-function combined_cv(pop_data, emp_data, admm_data, lh_data, lambdas, k, c)
+function combined_cv(pop_data, emp_data, admm_data, lh_data, lambdas, constraints, k)
   (B1, lh1, lambda1, lhs1) = min_admm_cv(pop_data, emp_data, admm_data, lambdas, k)
   lh_data.x_base = mat2vec(B1, emp_data)
-  lh_data.upper_bound = c * min(1/pop_data.p, 1/emp_data.E)
+  #= lh_data.upper_bound = c * min(1/pop_data.p, 1/emp_data.E) =#
   lh_data.B0 = copy(B1)
-  (B2, lh2, lambda2, lhs2) = min_constr_lh_cv(pop_data, emp_data, lh_data, lambdas, k) 
-  return (B1, B2, lh1, lh2, lambda1, lambda2, lhs1, lhs2)
+  (B2, lh2, lambda2, constraint, lhs2) = min_constr_lh_cv(pop_data, emp_data, lh_data, lambdas, k, constraints = constraints) 
+  return (B1, B2, lh1, lh2, lambda1, lambda2, constraint, lhs1, lhs2)
 end
 
 

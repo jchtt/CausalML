@@ -478,14 +478,16 @@ module CausalMLTest
                                   experiment_type = "binary",
                                   vert = 5,
                                   horz = 5,
-                                  lambdas = flipdim(logspace(-4, -1, 50), 1),
+                                  lambdas = logspace(-1, -4, 50),
                                   prefix = "debug2.bin",
                                   force_well_conditioned = false,
                                   bad_init = false,
                                   graph_type = "random",
                                   missing_exps = [0],
                                   B_fixed = [],
-                                  constant_n = false
+                                  constant_n = false,
+                                  cv = false,
+                                  constraints = logspace(1, -4, 50)
                                  )
 
     global combined_results = []
@@ -525,6 +527,7 @@ module CausalMLTest
       lambdas_noconstr_trials = zeros(trials)
       lambdas_noconstr_bad_trials = zeros(trials)
       ground_truth_norms = zeros(trials)
+      constraints_trials = zeros(trials)
 
       conditioning = []
       statuses1 = []
@@ -584,67 +587,78 @@ module CausalMLTest
         lh_data.use_constraint = true
 
         global errors1, errors2, B1, B2
-        # Comined run with continuation
-        (B1, B2, err1, err2, lambda1, lambda2, errors1, errors2, status1) = combined_oracle(pop_data, emp_data, admm_data, lh_data, lambdas)
-        push!(statuses1, status1)
-        # Run without constraint
-        lh_data.use_constraint = false
-        (B_noconstr, err_noconstr, lambda_noconstr, errors_noconstr) = min_constr_lh_oracle(pop_data, emp_data, lh_data, lambdas) 
-
-        # Same thing, with bad initialization
-        if bad_init
-          B0_bad = 10 * triu(randn(p,p), 1)
-          admm_data.B0 = B0_bad
-          admm_data.duals = [zeros(emp_data.p, emp_data.p) for e = 1:emp_data.E] # duals
-          admm_data.quic_data.inner_mult = 1
-          lh_data.use_constraint = true
-          (B1_bad, B2_bad, err1_bad, err2_bad, lambda1_bad, lambda2_bad, errors1_bad, errors2_bad, status1_bad) = combined_oracle(pop_data, emp_data, admm_data, lh_data, lambdas)
-          push!(statuses1_bad, status1_bad)
+        if cv
+          # Cross validation run
+          kfold = 3
+          (B1, B2, lh1, lh2, lambda1, lambda2, constraint, lhs1, lhs2) = combined_cv(pop_data, emp_data, admm_data, lh_data, lambdas, constraints, kfold, c)
+          push!(constraints_trials, constraint)
+          err1 = vecnorm(B1 - pop_data.B)
+          err2 = vecnorm(B2 - pop_data.B)
+        else
+          # Comined run with continuation
+          (B1, B2, err1, err2, lambda1, lambda2, errors1, errors2, status1) = combined_oracle(pop_data, emp_data, admm_data, lh_data, lambdas)
+          push!(statuses1, status1)
+          # Run without constraint
           lh_data.use_constraint = false
-          lh_data.B0 = B0_bad
-          (B_noconstr_bad, err_noconstr_bad, lambda_noconstr_bad, errors_noconstr_bad) = min_constr_lh_oracle(pop_data, emp_data, lh_data, lambdas) 
-        end
+          (B_noconstr, err_noconstr, lambda_noconstr, errors_noconstr) = min_constr_lh_oracle(pop_data, emp_data, lh_data, lambdas) 
 
-        # Run only likelihood
-        println("Run likelihood only")
-        lh_data.continuation = false
-        lh_data.use_constraint = false
-        lh_data.B0 = zeros(p, p)
-        (B_lh, err_lh, lambda_lh, errors_lh) = min_constr_lh_oracle(pop_data, emp_data, lh_data, lambdas) 
+          # Same thing, with bad initialization
+          if bad_init
+            B0_bad = 10 * triu(randn(p,p), 1)
+            admm_data.B0 = B0_bad
+            admm_data.duals = [zeros(emp_data.p, emp_data.p) for e = 1:emp_data.E] # duals
+            admm_data.quic_data.inner_mult = 1
+            lh_data.use_constraint = true
+            (B1_bad, B2_bad, err1_bad, err2_bad, lambda1_bad, lambda2_bad, errors1_bad, errors2_bad, status1_bad) = combined_oracle(pop_data, emp_data, admm_data, lh_data, lambdas)
+            push!(statuses1_bad, status1_bad)
+            lh_data.use_constraint = false
+            lh_data.B0 = B0_bad
+            (B_noconstr_bad, err_noconstr_bad, lambda_noconstr_bad, errors_noconstr_bad) = min_constr_lh_oracle(pop_data, emp_data, lh_data, lambdas) 
+          end
 
-        if bad_init
-          lh_data.B0 = B0_bad
-          (B_lh_bad, err_lh_bad, lambda_lh_bad, errors_lh_bad) = min_constr_lh_oracle(pop_data, emp_data, lh_data, lambdas) 
+          # Run only likelihood
+          println("Run likelihood only")
+          lh_data.continuation = false
+          lh_data.use_constraint = false
+          lh_data.B0 = zeros(p, p)
+          (B_lh, err_lh, lambda_lh, errors_lh) = min_constr_lh_oracle(pop_data, emp_data, lh_data, lambdas) 
+
+          if bad_init
+            lh_data.B0 = B0_bad
+            (B_lh_bad, err_lh_bad, lambda_lh_bad, errors_lh_bad) = min_constr_lh_oracle(pop_data, emp_data, lh_data, lambdas) 
+          end
+
+          # Save variables over trials
+          errors_noconstr_trials[trial] = err_noconstr
+          errors_lh_trials[trial] = err_lh
+
+
+          lambdas_noconstr_trials[trial] = lambda_noconstr
+          lambdas_lh_trials[trial] = lambda_lh
+
+          if bad_init
+            errors1_bad_trials[trial] = err1_bad
+            errors2_bad_trials[trial] = err2_bad
+            errors_noconstr_bad_trials[trial] = err_noconstr_bad
+            errors_lh_bad_trials[trial] = err_lh_bad
+
+            lambdas1_bad_trials[trial] = lambda1_bad
+            lambdas2_bad_trials[trial] = lambda2_bad
+            lambdas_noconstr_bad_trials[trial] = lambda_noconstr_bad
+            lambdas_lh_bad_trials[trial] = lambda_lh_bad
+          end
         end
 
         # Run LLC
         (B, err, lambda, _) = llc(pop_data, emp_data, lambdas)
 
-        # Save variables over trials
         errors1_trials[trial] = err1
         errors2_trials[trial] = err2
-        errors_noconstr_trials[trial] = err_noconstr
         errors_llc_trials[trial] = err
-        errors_lh_trials[trial] = err_lh
-
 
         lambdas1_trials[trial] = lambda1
         lambdas2_trials[trial] = lambda2
-        lambdas_noconstr_trials[trial] = lambda_noconstr
         lambdas_llc_trials[trial] = lambda
-        lambdas_lh_trials[trial] = lambda_lh
-
-        if bad_init
-          errors1_bad_trials[trial] = err1_bad
-          errors2_bad_trials[trial] = err2_bad
-          errors_noconstr_bad_trials[trial] = err_noconstr_bad
-          errors_lh_bad_trials[trial] = err_lh_bad
-
-          lambdas1_bad_trials[trial] = lambda1_bad
-          lambdas2_bad_trials[trial] = lambda2_bad
-          lambdas_noconstr_bad_trials[trial] = lambda_noconstr_bad
-          lambdas_lh_bad_trials[trial] = lambda_lh_bad
-        end
 
         println()
         #= println("Difference between ADMM results: ", vecnorm(B_admm - B_admm2)) =#
@@ -681,7 +695,8 @@ module CausalMLTest
                                      "cyclics" => cyclics,
                                      "exps" => pop_data.E,
                                      "gt"=>ground_truth_norms,
-                                     "constant_n"=>constant_n
+                                     "constant_n"=>constant_n,
+                                     "constraints"=>constraints_trials
                                     ))
 
         mkpath("results_" * prefix)
@@ -1033,7 +1048,7 @@ module CausalMLTest
     combined_oracle_screen(
                            admm_data,
                            lh_data,
-                           ps = 10:5:30,
+                           ps = 10:5:60,
                            #= ns = map(x -> ceil(Int32, x), logspace(log10(20), log10(20000), 12)), =#
                            #= vert = 5, =#
                            #= horz = 5, =#
@@ -1307,6 +1322,26 @@ module CausalMLTest
 
       admm_data.low_rank = false
       lh_data.low_rank = false
+
+    elseif task == "rand_cv_varn"
+      # Random, varn
+      combined_oracle_screen(
+                             admm_data,
+                             lh_data,
+                             ps = [30],
+                             #= ns = 2000, =#
+                             ns = map(x -> ceil(Int32, x), logspace(log10(20), log10(20000), 12)),
+                             ds = [4],
+                             trials = 1,
+                             scales = [0.8],
+                             experiment_type = "binary",
+                             force_well_conditioned = false,
+                             prefix = "rand_cv_varn",
+                             lambdas = flipdim(logspace(-4, 1, 50), 1),
+                             graph_type = "random",
+                             cv = true
+                            )
+
     end
   end
 
