@@ -590,7 +590,7 @@ module CausalMLTest
         if cv
           # Cross validation run
           kfold = 3
-          (B1, B2, lh1, lh2, lambda1, lambda2, constraint, lhs1, lhs2) = combined_cv(pop_data, emp_data, admm_data, lh_data, lambdas, constraints, kfold, c)
+          (B1, B2, lh1, lh2, lambda1, lambda2, constraint, lhs1, lhs2) = combined_cv(pop_data, emp_data, admm_data, lh_data, lambdas, constraints, kfold)
           push!(constraints_trials, constraint)
           err1 = vecnorm(B1 - pop_data.B)
           err2 = vecnorm(B2 - pop_data.B)
@@ -1322,27 +1322,28 @@ module CausalMLTest
 
       admm_data.low_rank = false
       lh_data.low_rank = false
-
-    elseif task == "rand_cv_varn"
-      # Random, varn
-      combined_oracle_screen(
-                             admm_data,
-                             lh_data,
-                             ps = [30],
-                             #= ns = 2000, =#
-                             ns = map(x -> ceil(Int32, x), logspace(log10(20), log10(20000), 12)),
-                             ds = [4],
-                             trials = 1,
-                             scales = [0.8],
-                             experiment_type = "binary",
-                             force_well_conditioned = false,
-                             prefix = "rand_cv_varn",
-                             lambdas = flipdim(logspace(-4, 1, 50), 1),
-                             graph_type = "random",
-                             cv = true
-                            )
-
     end
+
+  elseif task == "rand_cv_varn"
+    println("Rand_cv_varn")
+    # Random, varn
+    combined_oracle_screen(
+                           admm_data,
+                           lh_data,
+                           ps = [30],
+                           #= ns = 2000, =#
+                           ns = map(x -> ceil(Int32, x), logspace(log10(20), log10(20000), 12)),
+                           ds = [4],
+                           trials = 1,
+                           scales = [0.8],
+                           experiment_type = "binary",
+                           force_well_conditioned = false,
+                           prefix = "rand_cv_varn",
+                           lambdas = flipdim(logspace(-4, 1, 50), 1),
+                           graph_type = "random",
+                           cv = true
+                          )
+
   end
 
   toc()
