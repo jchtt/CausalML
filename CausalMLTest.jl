@@ -456,7 +456,7 @@ module CausalMLTest
 
     global errors1, errors2, B1, B2
     (B1_oracle, B2_oracle, err1, err2, lambda1_oracle, lambda2_oracle, errors1, errors2) = combined_oracle(pop_data, emp_data, admm_data, lh_data, lambdas)
-    (B1_cv, B2_cv, lh1, lh2, lambda1_cv, lambda2_cv, lhs1, lhs2) = combined_cv(pop_data, emp_data, admm_data, lh_data, lambdas, k, 100)
+    (B1_cv, B2_cv, lh1, lh2, lambda1_cv, lambda2_cv, lhs1, lhs2) = combined_cv(emp_data, admm_data, lh_data, lambdas, k, 100)
 
     println()
     #= println("Difference between ADMM results: ", vecnorm(B_admm - B_admm2)) =#
@@ -465,6 +465,16 @@ module CausalMLTest
 
     println("LH, oracle lambda: ", lambda2_oracle, ", difference: ", err2)
     println("LH, cv lambda: ", lambda2_cv, ", difference: ", vecnorm(B2_cv - pop_data.B))
+  end
+
+  function test_emp_data()
+    p = 5
+    Js_ind = [[1, 2], [3, 4]]
+    Xs = []
+    push!(Xs, randn(p, 10))
+    push!(Xs, randn(p, 20))
+
+    global emp_data = EmpiricalData(Xs, Js_ind)
   end
 
   function combined_oracle_screen(admm_data,
@@ -575,7 +585,8 @@ module CausalMLTest
 
         # Generate samples
         n_effective = constant_n ? ceil(Int, n/pop_data.E) : n
-        emp_data = EmpiricalData(pop_data, n_effective)
+        store_samples = cv
+        emp_data = EmpiricalData(pop_data, n_effective, store_samples = store_samples)
         #= push!(debug_data, [pop_data, emp_data]) =#
         #= savevar(fname, debug_data) =#
         ground_truth_norms[trial] = vecnorm(pop_data.B)
@@ -590,7 +601,7 @@ module CausalMLTest
         if cv
           # Cross validation run
           kfold = 3
-          (B1, B2, lh1, lh2, lambda1, lambda2, constraint, lhs1, lhs2) = combined_cv(pop_data, emp_data, admm_data, lh_data, lambdas, constraints, kfold)
+          (B1, B2, lh1, lh2, lambda1, lambda2, constraint, lhs1, lhs2) = combined_cv(emp_data, admm_data, lh_data, lambdas, constraints, kfold)
           push!(constraints_trials, constraint)
           err1 = vecnorm(B1 - pop_data.B)
           err2 = vecnorm(B2 - pop_data.B)
@@ -811,7 +822,7 @@ module CausalMLTest
     global lh_val2 = lh(emp_data, lh_data, mat2vec(pop_data.B, emp_data), [])
     println("B lh: ", lh_val2)
 
-    (B_cv, lh_val, lambda_cv, lhs) = min_admm_cv(pop_data, emp_data, admm_data, lambdas, k)
+    (B_cv, lh_val, lambda_cv, lhs) = min_admm_cv(emp_data, admm_data, lambdas, k)
     (B_oracle, err_oracle, lambda_oracle, errors) = min_admm_oracle(pop_data, emp_data, admm_data, lambdas)
 
     println("CV: ", lambda_cv, ", ", vecnorm(B_cv - pop_data.B))
@@ -853,7 +864,7 @@ module CausalMLTest
 
     #= (B_cv, lh_val, lambda_cv, ub_cv, lhs) = min_constr_lh_cv(pop_data, emp_data, lh_data, lambdas, k, constraints) =#
     println(lh_data.B0)
-    (B_cv, lh_val, lambda_cv, ub_cv, lhs) = min_constr_lh_cv(pop_data, emp_data, lh_data, lambdas, k)
+    (B_cv, lh_val, lambda_cv, ub_cv, lhs) = min_constr_lh_cv(emp_data, lh_data, lambdas, k)
     lh_data.lambda = lambda_cv
     B_cv2 = copy(min_constraint_lh(emp_data, lh_data))
     println(lh_data.B0)
@@ -919,7 +930,7 @@ module CausalMLTest
   if length(ARGS) >= 2
     task = ARGS[2]
   else
-    task = "rand_vark"
+    task = ""
   end
 
   # Set parameters

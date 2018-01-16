@@ -215,6 +215,8 @@ type PopulationData
       ret.B = gen_clusters(p, d, std)
     elseif graph_type == "clusters_norm"
       ret.B = gen_clusters(p, d, std/sqrt(d))
+    elseif graph_type == "data"
+      ret.B = zeros(p)
     else
       error("Unknown graph type")
     end
@@ -358,6 +360,26 @@ type PopulationData
   end
 end
 
+function prepare_fixed(emp_data)
+  # Prepare fixed indices
+  emp_data.diag_idx = diagm(trues(emp_data.p,1))
+  emp_data.offdiag_idx = ~emp_data.diag_idx
+  emp_data.find_offdiag_idx = find(~emp_data.diag_idx)
+  emp_data.dimsym = div(emp_data.p*(emp_data.p+1), 2)
+
+  emp_data.symdiag_idx = falses(emp_data.dimsym)
+  cur = 1
+  for i = 1:emp_data.p
+    emp_data.symdiag_idx[cur+i-1] = true
+    cur += i
+  end
+
+  emp_data.strict_lower_idx = tril(trues(emp_data.p,emp_data.p), -1)
+  emp_data.I = eye(emp_data.p)
+  emp_data.dimsym = div(emp_data.p*(emp_data.p+1), 2)
+end
+
+
 type EmpiricalData
   p::Int64
   n::Int64
@@ -372,37 +394,57 @@ type EmpiricalData
   Us
   Us_ind
   Js_ind
-  experiment_type
   sigmas_emp
   Xs
 
-  function EmpiricalData(pop_data, n; store_samples = false, Xs = [], constant_n = false)
+  """
+  Construct EmpiricalData from data Xs and information about the experiments in form of a list of indices of controlled variables
+  """
+  function EmpiricalData{T,R}(Xs::Array{T, 1},
+                         Js_ind::Array{R, 1})
+    ret = new()
+    ret.Js_ind = Js_ind
+    ret.E = length(Js_ind)
+    ret.p = size(Xs[1], 1)
+    ret.n = minimum([size(X, 2) for X in Xs])
+    ret.Xs = Xs
+    prepare_fixed(ret)
+
+    # Fill experiments
+    ret.Us_ind = []
+    ret.Us = []
+    for e = 1:ret.E
+      push!(ret.Us_ind, setdiff(1:ret.p, Js_ind[e]))
+      push!(ret.Us, zeros(ret.p, ret.p))
+      view(ret.Us[e], ret.diag_idx)[ret.Us_ind] = 1
+    end
+
+    # Calculate covariance matrices
+    ret.sigmas_emp = []
+    for e = 1:ret.E
+      push!(ret.sigmas_emp, Xs[e] * Xs[e]' / size(Xs[e], 2))
+    end
+
+    return ret
+  end
+
+  """
+  Construct EmpiricalData from PopulationData object, generating n samples per experiment.
+  """
+  function EmpiricalData(pop_data::PopulationData, n::Integer; store_samples = false, Xs = [], constant_n = false)
     ret = new()
     ret.p = pop_data.p
     ret.E = pop_data.E
     ret.n = n
 
     # Prepare fixed indices
-    ret.diag_idx = diagm(trues(ret.p,1))
-    ret.offdiag_idx = ~ret.diag_idx
-    ret.find_offdiag_idx = find(~ret.diag_idx)
-    ret.dimsym = div(ret.p*(ret.p+1), 2)
-
-    ret.symdiag_idx = falses(ret.dimsym)
-    cur = 1
-    for i = 1:ret.p
-      ret.symdiag_idx[cur+i-1] = true
-      cur += i
-    end
-
-    ret.strict_lower_idx = tril(trues(ret.p,ret.p), -1)
+    prepare_fixed(ret)
 
     # Generate covariance matrices
     B = pop_data.B
     ret.Us = pop_data.Us
     ret.Us_ind = pop_data.Us_ind
     ret.Js_ind = pop_data.Js_ind
-    ret.I = pop_data.I
     ret.sigmas_emp = []
 
     # Generate covariance matrices
@@ -431,25 +473,33 @@ type EmpiricalData
   end
 end
 
-function k_fold_split(pop_data, emp_data, k, i)
-  """
-  Return two new emp_data objects, one with the training data, the other with the testing data from the ith fold of a k-fold split.
-  """
+"""
+Return two new emp_data objects, one with the training data, the other with the testing data from the ith fold of a k-fold split.
+"""
+function k_fold_split(emp_data, k, i)
 
-  n = emp_data.n
-  fold_length = ceil(Int64, n/k)
+  Xs_train = []
+  Xs_test = []
 
-  if i < k
-    actual_length = fold_length
-  elseif i == k
-    actual_length = n - (k - 1) * fold_length
+  for e = 1:emp_data.E
+    n = size(emp_data.Xs[e], 2)
+    fold_length = ceil(Int64, n/k)
+
+    if i < k
+      actual_length = fold_length
+    elseif i == k
+      actual_length = n - (k - 1) * fold_length
+    end
+
+    test_r = (i-1)*fold_length + 1:min(i*fold_length, n)
+    train_r = setdiff(1:n, test_r)
+
+    push!(Xs_train, emp_data.Xs[e][:, train_r])
+    push!(Xs_test, emp_data.Xs[e][:, test_r])
   end
 
-  test_r = (i-1)*fold_length + 1:min(i*fold_length, n)
-  train_r = setdiff(1:n, test_r)
-
-  emp_data_test = EmpiricalData(pop_data, length(test_r), store_samples = false, Xs = [X[:, test_r] for X in emp_data.Xs])
-  emp_data_train = EmpiricalData(pop_data, length(train_r), store_samples = false, Xs = [X[:, train_r] for X in emp_data.Xs])
+  emp_data_test = EmpiricalData(Xs_test, emp_data.Js_ind)
+  emp_data_train = EmpiricalData(Xs_train, emp_data.Js_ind)
 
   return (emp_data_train, emp_data_test)
 end
@@ -3012,18 +3062,18 @@ function combined_oracle(pop_data, emp_data, admm_data, lh_data, lambdas)
   return (B1, B2, err1, err2, lambda1, lambda2, errors1, errors2, status1)
 end
 
-function min_admm_cv(pop_data, emp_data, admm_data, lambdas, k)
+function min_admm_cv(emp_data, admm_data, lambdas, k)
   lhs = zeros(length(lambdas))
   B0_old = copy(admm_data.B0)
   B_admms = [copy(admm_data.B0) for i = 1:k]
   emp_datas_train = []
   emp_datas_test = []
-  p = pop_data.p
+  p = emp_data.p
 
   lh_data = VanillaLHData(p, 0, zeros(p, p))
 
   for i = 1:k
-    (emp_train, emp_test) = k_fold_split(pop_data, emp_data, k, i)
+    (emp_train, emp_test) = k_fold_split(emp_data, k, i)
     push!(emp_datas_train, emp_train)
     push!(emp_datas_test, emp_test)
   end
@@ -3048,7 +3098,7 @@ function min_admm_cv(pop_data, emp_data, admm_data, lambdas, k)
   return (B, lh_val, lambdas[ind], lhs)
 end
 
-function min_constr_lh_cv(pop_data, emp_data, lh_data, lambdas, k, constraints = [lh_data.upper_bound])
+function min_constr_lh_cv(emp_data, lh_data, lambdas, k, constraints = [lh_data.upper_bound])
   lhs = zeros(length(constraints), length(lambdas))
   B_lhs = [copy(lh_data.B0) for i =1:k]
   B_lhs = repmat(B_lhs', length(constraints), 1)
@@ -3056,10 +3106,10 @@ function min_constr_lh_cv(pop_data, emp_data, lh_data, lambdas, k, constraints =
 
   emp_datas_train = []
   emp_datas_test = []
-  p = pop_data.p
+  p = emp_data.p
 
   for i = 1:k
-    (emp_train, emp_test) = k_fold_split(pop_data, emp_data, k, i)
+    (emp_train, emp_test) = k_fold_split(emp_data, k, i)
     push!(emp_datas_train, emp_train)
     push!(emp_datas_test, emp_test)
   end
@@ -3101,12 +3151,12 @@ function min_constr_lh_cv(pop_data, emp_data, lh_data, lambdas, k, constraints =
   return (B, lh_val, lambdas[i], constraints[c], lhs)
 end
 
-function combined_cv(pop_data, emp_data, admm_data, lh_data, lambdas, constraints, k)
-  (B1, lh1, lambda1, lhs1) = min_admm_cv(pop_data, emp_data, admm_data, lambdas, k)
+function combined_cv(emp_data, admm_data, lh_data, lambdas, constraints, k)
+  (B1, lh1, lambda1, lhs1) = min_admm_cv(emp_data, admm_data, lambdas, k)
   lh_data.x_base = mat2vec(B1, emp_data)
-  #= lh_data.upper_bound = c * min(1/pop_data.p, 1/emp_data.E) =#
+  #= lh_data.upper_bound = c * min(1/emp_data.p, 1/emp_data.E) =#
   lh_data.B0 = copy(B1)
-  (B2, lh2, lambda2, constraint, lhs2) = min_constr_lh_cv(pop_data, emp_data, lh_data, lambdas, k, constraints = constraints) 
+  (B2, lh2, lambda2, constraint, lhs2) = min_constr_lh_cv(emp_data, lh_data, lambdas, k, constraints = constraints) 
   return (B1, B2, lh1, lh2, lambda1, lambda2, constraint, lhs1, lhs2)
 end
 
