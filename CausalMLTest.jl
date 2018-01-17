@@ -1343,7 +1343,7 @@ module CausalMLTest
                            lh_data,
                            ps = [30],
                            #= ns = 2000, =#
-                           ns = map(x -> ceil(Int32, x), logspace(log10(20), log10(20000), 12)),
+                           ns = map(x -> ceil(Int32, x), logspace(log10(100), log10(20000), 12)),
                            ds = [4],
                            trials = 1,
                            scales = [0.8],
