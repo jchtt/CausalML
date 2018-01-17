@@ -3156,7 +3156,7 @@ function combined_cv(emp_data, admm_data, lh_data, lambdas, constraints, k)
   lh_data.x_base = mat2vec(B1, emp_data)
   #= lh_data.upper_bound = c * min(1/emp_data.p, 1/emp_data.E) =#
   lh_data.B0 = copy(B1)
-  (B2, lh2, lambda2, constraint, lhs2) = min_constr_lh_cv(emp_data, lh_data, lambdas, k, constraints = constraints) 
+  (B2, lh2, lambda2, constraint, lhs2) = min_constr_lh_cv(emp_data, lh_data, lambdas, k, constraints) 
   return (B1, B2, lh1, lh2, lambda1, lambda2, constraint, lhs1, lhs2)
 end
 
