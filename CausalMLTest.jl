@@ -1341,7 +1341,7 @@ module CausalMLTest
     combined_oracle_screen(
                            admm_data,
                            lh_data,
-                           ps = [20],
+                           ps = [16],
                            #= ns = 2000, =#
                            ns = map(x -> ceil(Int32, x), logspace(log10(100), log10(20000), 12)),
                            ds = [3],
