@@ -1341,10 +1341,10 @@ module CausalMLTest
     combined_oracle_screen(
                            admm_data,
                            lh_data,
-                           ps = [30],
+                           ps = [20],
                            #= ns = 2000, =#
                            ns = map(x -> ceil(Int32, x), logspace(log10(100), log10(20000), 12)),
-                           ds = [4],
+                           ds = [3],
                            trials = 1,
                            scales = [0.8],
                            experiment_type = "binary",
