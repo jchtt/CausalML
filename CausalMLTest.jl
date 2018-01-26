@@ -477,6 +477,72 @@ module CausalMLTest
     global emp_data = EmpiricalData(Xs, Js_ind)
   end
 
+  function combined_oracle_single(admm_data,
+                                  lh_data;
+                                  p = 20,
+                                  n = 10000,
+                                  d = 5,
+                                  k = 5,
+                                  scale = 0.8,
+                                  experiment_type = "binary",
+                                  vert = 5,
+                                  horz = 5,
+                                  lambdas = logspace(-1, -4, 50),
+                                  prefix = "debug2.bin",
+                                  force_well_conditioned = false,
+                                  bad_init = false,
+                                  graph_type = "random",
+                                  missing_exps = [0],
+                                  B_fixed = [],
+                                  constant_n = false,
+                                  cv = false,
+                                  constraints = logspace(1, -4, 50),
+                                  missing = 0
+                                 )
+
+    pop_data = PopulationData(p, d, scale, experiment_type, graph_type = graph_type, missing_exps = missing, B_fixed = B_fixed, horz = horz, vert = vert, k = k)
+
+    n_effective = constant_n ? ceil(Int, n/pop_data.E) : n
+    store_samples = cv
+    emp_data = EmpiricalData(pop_data, n_effective, store_samples = store_samples)
+
+    # Reset
+    reinit_admm(admm_data, p, emp_data.E)
+    reinit_quic_data(admm_data.quic_data, p)
+    reinit_lh_data(lh_data, p)
+    lh_data.use_constraint = true
+
+    if cv
+      # Cross validation run
+      kfold = 3
+      (B1, B2, lh1, lh2, lambda1, lambda2, constraint, lhs1, lhs2) = combined_cv(emp_data, admm_data, lh_data, lambdas, constraints, kfold)
+      err1 = vecnorm(B1 - pop_data.B)
+      err2 = vecnorm(B2 - pop_data.B)
+    else
+      # Comined run with continuation
+      (B1, B2, err1, err2, lambda1, lambda2, errors1, errors2, status1) = combined_oracle(pop_data, emp_data, admm_data, lh_data, lambdas)
+      # Run without constraint
+      lh_data.use_constraint = false
+      (B_noconstr, err_noconstr, lambda_noconstr, errors_noconstr) = min_constr_lh_oracle(pop_data, emp_data, lh_data, lambdas) 
+    end
+
+    # Run LLC
+    (B, err, lambda, _) = llc(pop_data, emp_data, lambdas)
+
+    results = Dict("B" => pop_data.B,
+                   "B1" => B1,
+                   "B2" => B2,
+                   "B_llc" => B
+                  )
+
+    mkpath("single_" * prefix)
+    fname = joinpath("single_" * prefix, "single_" * ".bin")
+    open(fname, "w") do file
+      serialize(file, results)
+    end
+  end
+
+
   function combined_oracle_screen(admm_data,
                                   lh_data;
                                   ps = [20],
@@ -930,7 +996,7 @@ module CausalMLTest
   if length(ARGS) >= 2
     task = ARGS[2]
   else
-    task = ""
+    task = "clusters_single"
   end
 
   # Set parameters
@@ -1076,6 +1142,26 @@ module CausalMLTest
                           )
     admm_data.early_stop = true
 
+  elseif task == "clusters_vare"
+    # Clusters, vark
+    combined_oracle_screen(
+                           admm_data,
+                           lh_data,
+                           ps = [32],
+                           ns = [2000 * 32],
+                           #= ns = map(x -> ceil(Int32, x), logspace(log10(20), log10(20000), 12)), =#
+                           ds = [3],
+                           ks = 1:10,
+                           trials = 1,
+                           scales = [0.8/sqrt(3)],
+                           experiment_type = "bounded",
+                           force_well_conditioned = false,
+                           prefix = "clusters_vare_norm",
+                           lambdas = flipdim(logspace(-4, 1, 50), 1),
+                           graph_type = "clusters",
+                           constant_n = true
+                          )
+
   elseif task == "clusters_missing"
     # Random, missing exps
     admm_data.low_rank = true
@@ -1122,6 +1208,29 @@ module CausalMLTest
                            constant_n = true
                           )
 
+  elseif task == "cycles_vare"
+    # Clusters, vark
+    combined_oracle_screen(
+                           admm_data,
+                           lh_data,
+                           ps = [34],
+                           ns = [2000 * 34],
+                           #= ns = map(x -> ceil(Int32, x), logspace(log10(20), log10(20000), 12)), =#
+                           ds = [3],
+                           vert = 5,
+                           horz = 5,
+                           ks = 1:10,
+                           trials = 1,
+                           scales = [0.8/sqrt(3)],
+                           experiment_type = "bounded",
+                           force_well_conditioned = false,
+                           prefix = "cycles_vare",
+                           lambdas = flipdim(logspace(-4, 1, 50), 1),
+                           graph_type = "overlap_cycles",
+                           constant_n = true
+                          )
+
+
   elseif task == "cycles_varn"
     # Cycles, varn
     combined_oracle_screen(
@@ -1160,7 +1269,7 @@ module CausalMLTest
                            force_well_conditioned = false,
                            prefix = "cycles_missing",
                            lambdas = flipdim(logspace(-4, 1, 50), 1),
-                           graph_type = "clusters",
+                           graph_type = "overlap_cycles",
                            missing_exps = 0:33,
                            constant_n = true
                           )
@@ -1268,7 +1377,27 @@ module CausalMLTest
                            force_well_conditioned = false,
                            prefix = "rand_vare_norm",
                            lambdas = flipdim(logspace(-4, 1, 50), 1),
-                           graph_type = "random_norm",
+                           graph_type = "random",
+                           constant_n = true
+                          )
+
+  elseif task == "worst_vare"
+    # Random, vark
+    combined_oracle_screen(
+                           admm_data,
+                           lh_data,
+                           ps = [30],
+                           ns = [2000 * 30],
+                           #= ns = map(x -> ceil(Int32, x), logspace(log10(20), log10(20000), 12)), =#
+                           ds = [3],
+                           ks = 1:10,
+                           trials = 1,
+                           scales = [0.8/sqrt(3)],
+                           experiment_type = "bounded",
+                           force_well_conditioned = false,
+                           prefix = "rand_vare_norm",
+                           lambdas = flipdim(logspace(-4, 1, 50), 1),
+                           graph_type = "worst_case",
                            constant_n = true
                           )
 
@@ -1355,6 +1484,22 @@ module CausalMLTest
                            cv = true
                           )
 
+  elseif task == "clusters_single"
+    println("Clusters single")
+    # Clusters, varn
+    combined_oracle_single(
+                           admm_data,
+                           lh_data,
+                           p = 32,
+                           n = 200,
+                           d = 3,
+                           scale = 0.8,
+                           experiment_type = "binary",
+                           force_well_conditioned = false,
+                           prefix = "clusters",
+                           lambdas = flipdim(logspace(-4, 1, 50), 1),
+                           graph_type = "clusters"
+                          )
   end
 
   toc()

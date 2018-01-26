@@ -174,6 +174,20 @@ function gen_clusters(p, d, std)
   return B
 end
 
+function gen_worst_case_rand(p, d, std)
+  if p % 2 != 0
+    error("p must be a multiple of 2")
+  end
+
+  p2 = div(p, 2)
+  B2 = gen_b(p2, d, std)
+  B = zeros(p, p)
+  B[1:p2, p2+1:end] = B2
+  B[p2+1:end, 1:p2] = -B2
+
+  return B
+end
+
 function hard_thresh(x, t)
   return abs(x) >= t ? x : 0.0
 end
@@ -215,6 +229,8 @@ type PopulationData
       ret.B = gen_clusters(p, d, std)
     elseif graph_type == "clusters_norm"
       ret.B = gen_clusters(p, d, std/sqrt(d))
+    elseif graph_type == "worst_case"
+      ret.B = gen_worst_case_rand(p, d, std/d)
     elseif graph_type == "data"
       ret.B = zeros(p)
     else
