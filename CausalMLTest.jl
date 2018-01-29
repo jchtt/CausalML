@@ -642,6 +642,7 @@ module CausalMLTest
         #= println("Condition number: ", cond(eye(p) - pop_data.B)) =#
 
         push!(conditioning, ind_conditioning)
+        kappa = find_kappa(p, pop_data.Js_ind)
 
         # Determine connectedness
         G = DiGraph(pop_data.B)
@@ -667,10 +668,13 @@ module CausalMLTest
         if cv
           # Cross validation run
           kfold = 3
+          lh_data.use_constraint = false
+          constraints = [0]
           (B1, B2, lh1, lh2, lambda1, lambda2, constraint, lhs1, lhs2) = combined_cv(emp_data, admm_data, lh_data, lambdas, constraints, kfold)
           push!(constraints_trials, constraint)
           err1 = vecnorm(B1 - pop_data.B)
           err2 = vecnorm(B2 - pop_data.B)
+          lh_data.use_constraint = true
         else
           # Comined run with continuation
           (B1, B2, err1, err2, lambda1, lambda2, errors1, errors2, status1) = combined_oracle(pop_data, emp_data, admm_data, lh_data, lambdas)
@@ -678,6 +682,7 @@ module CausalMLTest
           # Run without constraint
           lh_data.use_constraint = false
           (B_noconstr, err_noconstr, lambda_noconstr, errors_noconstr) = min_constr_lh_oracle(pop_data, emp_data, lh_data, lambdas) 
+          lh_data.use_constraint = true
 
           # Same thing, with bad initialization
           if bad_init
@@ -745,6 +750,7 @@ module CausalMLTest
         push!(combined_results, Dict("n"=>n, "p"=>p, "d"=>d,
                                      "k"=>k,
                                      "std"=>scale,
+                                     "kappa"=>kappa,
                                      "missing_exps"=>missing,
                                      "conditioning"=>conditioning,
                                      "statuses1"=>statuses1,
@@ -846,6 +852,19 @@ module CausalMLTest
     global emp_data = EmpiricalData(pop_data, n, store_samples = true)
     global emp_data_test, emp_data_train
     (emp_data_train, emp_data_test) = k_fold_split(pop_data, emp_data, 6, 6)
+  end
+
+  function kappa_test()
+    p = 32
+    d = 3 
+    n = 1000
+    matrix_std = 0.8
+    experiment_type = "bounded"
+    k = 8
+    global pop_data = PopulationData(p, d, matrix_std, experiment_type, k = k)
+    global emp_data = EmpiricalData(pop_data, n, store_samples = true)
+    global kappa = find_kappa(p, emp_data.Js_ind)
+    println("kappa = ", maximum(kappa))
   end
 
   function admm_cv_test()
@@ -996,7 +1015,7 @@ module CausalMLTest
   if length(ARGS) >= 2
     task = ARGS[2]
   else
-    task = "clusters_single"
+    task = "test_kappa"
   end
 
   # Set parameters
@@ -1361,7 +1380,7 @@ module CausalMLTest
                            graph_type = "random_norm"
                           )
 
-  elseif task == "rand_vark"
+  elseif task == "rand_vare"
     # Random, vark
     combined_oracle_screen(
                            admm_data,
@@ -1395,7 +1414,7 @@ module CausalMLTest
                            scales = [0.8/sqrt(3)],
                            experiment_type = "bounded",
                            force_well_conditioned = false,
-                           prefix = "rand_vare_norm",
+                           prefix = "worst_vare",
                            lambdas = flipdim(logspace(-4, 1, 50), 1),
                            graph_type = "worst_case",
                            constant_n = true
@@ -1484,6 +1503,26 @@ module CausalMLTest
                            cv = true
                           )
 
+  elseif task == "rand_cv_varn_noconstr"
+    println("Rand_cv_varn")
+    # Random, varn
+    combined_oracle_screen(
+                           admm_data,
+                           lh_data,
+                           ps = [16],
+                           #= ns = 2000, =#
+                           ns = map(x -> ceil(Int32, x), logspace(log10(100), log10(20000), 12)),
+                           ds = [3],
+                           trials = 1,
+                           scales = [0.8],
+                           experiment_type = "binary",
+                           force_well_conditioned = false,
+                           prefix = "rand_cv_varn_noconstr",
+                           lambdas = flipdim(logspace(-4, 1, 50), 1),
+                           graph_type = "random",
+                           cv = true
+                          )
+
   elseif task == "clusters_single"
     println("Clusters single")
     # Clusters, varn
@@ -1500,6 +1539,8 @@ module CausalMLTest
                            lambdas = flipdim(logspace(-4, 1, 50), 1),
                            graph_type = "clusters"
                           )
+  elseif task == "test_kappa"
+    kappa_test()
   end
 
   toc()

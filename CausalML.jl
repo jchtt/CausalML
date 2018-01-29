@@ -5,6 +5,7 @@ export gen_b,
   gen_clusters,
   PopulationData,
   EmpiricalData,
+  find_kappa,
   lh,
   l1_wrap,
   mat2vec,
@@ -487,6 +488,16 @@ type EmpiricalData
 
     return ret
   end
+end
+
+function find_kappa(p, Js_ind)
+  cross_mat = zeros(p, p)
+  for J_ind in Js_ind
+    U_ind = setdiff(1:p, J_ind)
+    cross_mat[J_ind, U_ind] += 1
+    cross_mat[U_ind, J_ind] += 1
+  end
+  return maximum(cross_mat)
 end
 
 """
