@@ -3172,7 +3172,7 @@ function min_constr_lh_cv(emp_data, lh_data, lambdas, k, constraints = [lh_data.
   if lh_data.use_constraint
     B = copy(min_constraint_lh(emp_data, lh_data))
   else
-    B = copy(min_vanilla_lh(emp_data_data, lh_data))
+    B = copy(min_vanilla_lh(emp_data, lh_data))
   end
 
   return (B, lh_val, lambdas[i], constraints[c], lhs)
