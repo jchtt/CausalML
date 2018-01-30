@@ -11,11 +11,11 @@ tasks = [
         # ("clusters_varp", 32),
         # ("cycles_varp", 32),
         # ("cycles_varn", 32),
-        ("cycles_vare", 32),
+        # ("cycles_vare", 32),
         # ("clusters_varn", 32),
         # ("rand_missing", 32),
         # ("rand_vard_norm", 32),
-        ("rand_vare", 32),
+        # ("rand_vare", 32),
 
         # ("clusters_missing", 1),
         # ("cycles_missing", 32),
@@ -25,7 +25,7 @@ tasks = [
         # ("rand_varn", 32),
         # ("rand_varp", 32),
         ("rand_cv_varn", 32),
-        ("worst_vare", 32)
+        # ("worst_vare", 32)
         ]
 last_start = 7
 last_minute = 0
