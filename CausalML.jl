@@ -3155,7 +3155,7 @@ function min_constr_lh_cv(emp_data, lh_data, lambdas, k, constraints = [lh_data.
         if lh_data.use_constraint
           B_lhs[c, j] = copy(min_constraint_lh(emp_datas_train[j], lh_data))
         else
-          B_lh[c, j] = copy(min_vanilla_lh(emp_datas_train[j], lh_data))
+          B_lhs[c, j] = copy(min_vanilla_lh(emp_datas_train[j], lh_data))
         end
         lh_val += lh(emp_datas_test[j], lh_data, mat2vec(B_lhs[j], emp_data, reduced = true), [])
       end
