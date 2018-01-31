@@ -3144,7 +3144,7 @@ function min_constr_lh_cv(emp_data, lh_data, lambdas, k, constraints = [lh_data.
   for c = 1:length(constraints)
     lh_data.B0 = copy(B0_old)
     for i = 1:length(lambdas)
-      println("constraint = ", constraints[c], ", [lambda = ", lambdas[i])
+      println("constraint = ", constraints[c], ", lambda = ", lambdas[i])
       lh_val = 0
       lh_data.lambda = lambdas[i]
       lh_data.upper_bound = constraints[c]
