@@ -670,12 +670,12 @@ module CausalMLTest
           kfold = 3
           #= lh_data.use_constraint = false =#
           #= constraints = [0] =#
-          lh_data.continuation = false
+          #= lh_data.continuation = false =#
           (B1, B2, lh1, lh2, lambda1, lambda2, constraint, lhs1, lhs2) = combined_cv(emp_data, admm_data, lh_data, lambdas, constraints, kfold)
           push!(constraints_trials, constraint)
           err1 = vecnorm(B1 - pop_data.B)
           err2 = vecnorm(B2 - pop_data.B)
-          lh_data.continuation = true
+          #= lh_data.continuation = true =#
           #= lh_data.use_constraint = true =#
         else
           # Comined run with continuation
@@ -862,7 +862,7 @@ module CausalMLTest
     n = 1000
     matrix_std = 0.8
     experiment_type = "bounded"
-    k = 2
+    k = 7
     global pop_data = PopulationData(p, d, matrix_std, experiment_type, k = k)
     global emp_data = EmpiricalData(pop_data, n, store_samples = true)
     global kappa = find_kappa(p, emp_data.Js_ind)
@@ -1018,6 +1018,7 @@ module CausalMLTest
     task = ARGS[2]
   else
     task = "rand_cv_varn"
+    #= task = "test_kappa" =#
   end
 
   # Set parameters

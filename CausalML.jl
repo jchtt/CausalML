@@ -47,6 +47,7 @@ using NLopt
 #using ForwardDiff
 using BenchmarkTools
 using StatsFuns
+using StatsBase
 using Base.LinAlg.LAPACK
 using Calculus
 #= using RGlasso =#
@@ -337,6 +338,24 @@ type PopulationData
 
         push!(ret.Us, U)
       end
+    elseif experiment_type == "bounded_random"
+      sep_mat = falses(p, p)
+      for i = 1:p
+        sep_mat[i, i] = true
+      end
+      while !all(sep_mat)
+        J_ind = sample(1:p, k, replace = false)
+        push!(ret.Js_ind, J_ind)
+        U_ind = setdiff(1:p, J_ind)
+        sep_mat[J_ind, U_ind] = true
+
+        # Fill remaining
+        push!(ret.Us_ind, U_ind)
+        U = ones(p)
+        U[J_ind] = 0
+        U = diagm(U)
+        push!(ret.Us, U)
+      end
     elseif experiment_type == "all_but_one"
       for e = 1:p
         mask = trues(p)
@@ -495,9 +514,9 @@ function find_kappa(p, Js_ind)
   for J_ind in Js_ind
     U_ind = setdiff(1:p, J_ind)
     cross_mat[J_ind, U_ind] += 1
-    cross_mat[U_ind, J_ind] += 1
   end
-  return maximum(cross_mat)
+  #= return maximum(cross_mat) =#
+  return cross_mat
 end
 
 """
@@ -3157,7 +3176,7 @@ function min_constr_lh_cv(emp_data, lh_data, lambdas, k, constraints = [lh_data.
         else
           B_lhs[c, j] = copy(min_vanilla_lh(emp_datas_train[j], lh_data))
         end
-        lh_val += lh(emp_datas_test[j], lh_data, mat2vec(B_lhs[j], emp_data, reduced = true), [])
+        lh_val += lh(emp_datas_test[j], lh_data, mat2vec(B_lhs[c, j], emp_data, reduced = true), [])
       end
 
       lhs[c, i] = lh_val
@@ -3186,7 +3205,6 @@ function combined_cv(emp_data, admm_data, lh_data, lambdas, constraints, k)
   (B2, lh2, lambda2, constraint, lhs2) = min_constr_lh_cv(emp_data, lh_data, lambdas, k, constraints) 
   return (B1, B2, lh1, lh2, lambda1, lambda2, constraint, lhs1, lhs2)
 end
-
 
 # LLC functionality
 function delete_shift_ind(l, i)
