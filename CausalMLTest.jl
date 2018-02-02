@@ -670,12 +670,12 @@ module CausalMLTest
           kfold = 3
           #= lh_data.use_constraint = false =#
           #= constraints = [0] =#
-          #= lh_data.continuation = false =#
+          lh_data.continuation = false
           (B1, B2, lh1, lh2, lambda1, lambda2, constraint, lhs1, lhs2) = combined_cv(emp_data, admm_data, lh_data, lambdas, constraints, kfold)
           push!(constraints_trials, constraint)
           err1 = vecnorm(B1 - pop_data.B)
           err2 = vecnorm(B2 - pop_data.B)
-          #= lh_data.continuation = true =#
+          lh_data.continuation = true
           #= lh_data.use_constraint = true =#
         else
           # Comined run with continuation

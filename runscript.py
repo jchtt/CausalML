@@ -24,8 +24,8 @@ tasks = [
         # ("cycles_missing", 32),
         # ("rand_varn", 32),
         # ("rand_varp", 32),
-        ("rand_cv_varn", 1),
-        # ("worst_vare", 32)
+        ("worst_vare", 32)
+        ("rand_cv_varn", 32),
         ]
 last_start = 7
 last_minute = 0
