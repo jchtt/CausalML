@@ -670,7 +670,7 @@ module CausalMLTest
         global errors1, errors2, B1, B2, lhs2
         if cv
           # Cross validation run
-          kfold = 3
+          kfold = 5
           #= lh_data.use_constraint = false =#
           #= constraints = [0] =#
           lh_data.continuation = false
@@ -680,6 +680,9 @@ module CausalMLTest
           err2 = vecnorm(B2 - pop_data.B)
           lh_data.continuation = true
           #= lh_data.use_constraint = true =#
+          open("lhs-debug.bin", "w") do file
+            serialize(file, lhs2)
+          end
         else
           # Comined run with continuation
           (B1, B2, err1, err2, lambda1, lambda2, errors1, errors2, status1) = combined_oracle(pop_data, emp_data, admm_data, lh_data, lambdas)
@@ -1410,12 +1413,14 @@ module CausalMLTest
 
   elseif task == "worst_vare"
     # Random, vark
-    admm_data.tol_abs *= 1e-1
-    admm_data.tol_rel *= 1e-1
-    admm_data.quic_data.tol *= 1e-1
-    admm_data.quic_data.tol_rel *= 1e-1
-    admm_data.quic_data.inner_tol *= 1e-1
-    lh_data.final_tol *= 1e-1
+    factor = 1e-3
+
+    admm_data.tol_abs *= factor
+    admm_data.tol_rel *= factor
+    admm_data.quic_data.tol *= factor
+    admm_data.quic_data.tol_rel *= factor
+    admm_data.quic_data.inner_tol *= factor
+    lh_data.final_tol *= factor
 
     combined_oracle_screen(
                            admm_data,
@@ -1435,12 +1440,12 @@ module CausalMLTest
                            constant_n = true
                           )
 
-    admm_data.tol_abs *= 1e1
-    admm_data.tol_rel *= 1e1
-    admm_data.quic_data.tol *= 1e1
-    admm_data.quic_data.tol_rel *= 1e1
-    admm_data.quic_data.inner_tol *= 1e1
-    lh_data.final_tol *= 1e1
+    admm_data.tol_abs /= factor
+    admm_data.tol_rel /= factor
+    admm_data.quic_data.tol /= factor
+    admm_data.quic_data.tol_rel /= factor
+    admm_data.quic_data.inner_tol /= factor
+    lh_data.final_tol /= factor
 
   elseif startswith(task, "semi_synth")
 
