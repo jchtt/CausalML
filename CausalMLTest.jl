@@ -514,10 +514,13 @@ module CausalMLTest
 
     if cv
       # Cross validation run
-      kfold = 3
+      kfold = 5
       (B1, B2, lh1, lh2, lambda1, lambda2, constraint, lhs1, lhs2) = combined_cv(emp_data, admm_data, lh_data, lambdas, constraints, kfold)
       err1 = vecnorm(B1 - pop_data.B)
       err2 = vecnorm(B2 - pop_data.B)
+      open("lhs-debug.bin", "w") do file
+        serialize(file, lhs2)
+      end
     else
       # Comined run with continuation
       (B1, B2, err1, err2, lambda1, lambda2, errors1, errors2, status1) = combined_oracle(pop_data, emp_data, admm_data, lh_data, lambdas)
@@ -1009,6 +1012,7 @@ module CausalMLTest
   #= lh_cv_test() =#
   #= test_condition_number() =#
 
+  blas_set_num_threads(4)
 
   tic()
   #= combined_oracle_screen() =#
@@ -1406,6 +1410,13 @@ module CausalMLTest
 
   elseif task == "worst_vare"
     # Random, vark
+    admm_data.tol_abs *= 1e-1
+    admm_data.tol_rel *= 1e-1
+    admm_data.quic_data.tol *= 1e-1
+    admm_data.quic_data.tol_rel *= 1e-1
+    admm_data.quic_data.inner_tol *= 1e-1
+    lh_data.final_tol *= 1e-1
+
     combined_oracle_screen(
                            admm_data,
                            lh_data,
@@ -1415,7 +1426,7 @@ module CausalMLTest
                            ds = [3],
                            ks = 1:10,
                            trials = 1,
-                           scales = [0.5/sqrt(30 * 2000)],
+                           scales = [0.01],
                            experiment_type = "bounded",
                            force_well_conditioned = false,
                            prefix = "worst_vare",
@@ -1423,6 +1434,13 @@ module CausalMLTest
                            graph_type = "worst_case",
                            constant_n = true
                           )
+
+    admm_data.tol_abs *= 1e1
+    admm_data.tol_rel *= 1e1
+    admm_data.quic_data.tol *= 1e1
+    admm_data.quic_data.tol_rel *= 1e1
+    admm_data.quic_data.inner_tol *= 1e1
+    lh_data.final_tol *= 1e1
 
   elseif startswith(task, "semi_synth")
 
