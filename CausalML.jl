@@ -182,7 +182,14 @@ function gen_worst_case_rand(p, d, std)
   end
 
   p2 = div(p, 2)
-  B2 = gen_b(p2, d, std)
+
+  B2 = zeros(p2, p2)
+  for i = 1:p2
+    perm = randperm(p2 - 1)
+    perm[perm .>= i] += 1
+    B2[i, perm[1:d]] = std
+  end
+
   B = zeros(p, p)
   B[1:p2, p2+1:end] = B2
   B[p2+1:end, 1:p2] = -B2

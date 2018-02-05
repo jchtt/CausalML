@@ -1017,7 +1017,8 @@ module CausalMLTest
   if length(ARGS) >= 2
     task = ARGS[2]
   else
-    task = "rand_cv_varn"
+    #= task = "rand_cv_varn" =#
+    task = "worst_vare"
     #= task = "test_kappa" =#
   end
 
@@ -1414,7 +1415,7 @@ module CausalMLTest
                            ds = [3],
                            ks = 1:10,
                            trials = 1,
-                           scales = [0.8/sqrt(3)],
+                           scales = [0.5/sqrt(30 * 2000)],
                            experiment_type = "bounded",
                            force_well_conditioned = false,
                            prefix = "worst_vare",
