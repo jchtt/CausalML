@@ -1012,7 +1012,7 @@ module CausalMLTest
   #= lh_cv_test() =#
   #= test_condition_number() =#
 
-  blas_set_num_threads(4)
+  blas_set_num_threads(2)
 
   tic()
   #= combined_oracle_screen() =#
