@@ -239,7 +239,7 @@ type PopulationData
     elseif graph_type == "clusters_norm"
       ret.B = gen_clusters(p, d, std/sqrt(d))
     elseif graph_type == "worst_case"
-      ret.B = gen_worst_case_rand(p, d, std/d)
+      ret.B = gen_worst_case_rand(p, d, std)
     elseif graph_type == "data"
       ret.B = zeros(p)
     else

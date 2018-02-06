@@ -1423,13 +1423,14 @@ module CausalMLTest
 
   elseif task == "worst_vare"
     # Random, vark
-    factor = 1e-5
+    factor = 1e-4
+    factor_quic = 1e-3
 
     admm_data.tol_abs *= factor
     admm_data.tol_rel *= factor
-    admm_data.quic_data.tol *= factor
-    admm_data.quic_data.tol_rel *= factor
-    admm_data.quic_data.inner_tol *= factor
+    admm_data.quic_data.tol *= factor_quic
+    admm_data.quic_data.tol_rel *= factor_quic
+    admm_data.quic_data.inner_tol *= factor_quic
     lh_data.final_tol *= factor
 
     combined_oracle_screen(
@@ -1439,9 +1440,9 @@ module CausalMLTest
                            ns = [2000 * 30],
                            #= ns = map(x -> ceil(Int32, x), logspace(log10(20), log10(20000), 12)), =#
                            ds = [3],
-                           ks = 1:8,
+                           ks = 1:5,
                            trials = 1,
-                           scales = [0.01],
+                           scales = [0.1],
                            experiment_type = "bounded",
                            force_well_conditioned = false,
                            prefix = "worst_vare",
@@ -1452,9 +1453,9 @@ module CausalMLTest
 
     admm_data.tol_abs /= factor
     admm_data.tol_rel /= factor
-    admm_data.quic_data.tol /= factor
-    admm_data.quic_data.tol_rel /= factor
-    admm_data.quic_data.inner_tol /= factor
+    admm_data.quic_data.tol /= factor_quic
+    admm_data.quic_data.tol_rel /= factor_quic
+    admm_data.quic_data.inner_tol /= factor_quic
     lh_data.final_tol /= factor
 
   elseif startswith(task, "semi_synth")
