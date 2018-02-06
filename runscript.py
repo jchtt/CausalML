@@ -25,8 +25,9 @@ tasks = [
         # ("rand_varn", 32),
         # ("rand_varp", 32),
         # ("worst_vare", 1),
-        ("rand_cv_varn", 1),
+        ("rand_cv_varn", 32),
         ]
+
 last_start = 7
 last_minute = 0
 cur_time = datetime.datetime.now()

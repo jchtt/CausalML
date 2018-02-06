@@ -518,6 +518,8 @@ module CausalMLTest
       (B1, B2, lh1, lh2, lambda1, lambda2, constraint, lhs1, lhs2) = combined_cv(emp_data, admm_data, lh_data, lambdas, constraints, kfold)
       err1 = vecnorm(B1 - pop_data.B)
       err2 = vecnorm(B2 - pop_data.B)
+
+
       open("lhs-debug.bin", "w") do file
         serialize(file, lhs2)
       end
@@ -678,6 +680,14 @@ module CausalMLTest
           push!(constraints_trials, constraint)
           err1 = vecnorm(B1 - pop_data.B)
           err2 = vecnorm(B2 - pop_data.B)
+
+          # Run without constraint
+          lh_data.use_constraint = false
+          lh_data.B0 = copy(B1)
+          (B_noconstr, lh_noconstr, lambda_noconstr, _, lhs_noconstr) = min_constr_lh_cv(emp_data, lh_data, lambdas, kfold, [0])
+          err_noconstr = vecnorm(B_noconstr - pop_data.B)
+          lh_data.use_constraint = true
+
           lh_data.continuation = true
           #= lh_data.use_constraint = true =#
           open("lhs-debug.bin", "w") do file
@@ -1413,7 +1423,7 @@ module CausalMLTest
 
   elseif task == "worst_vare"
     # Random, vark
-    factor = 1e-3
+    factor = 1e-5
 
     admm_data.tol_abs *= factor
     admm_data.tol_rel *= factor
@@ -1429,7 +1439,7 @@ module CausalMLTest
                            ns = [2000 * 30],
                            #= ns = map(x -> ceil(Int32, x), logspace(log10(20), log10(20000), 12)), =#
                            ds = [3],
-                           ks = 1:10,
+                           ks = 1:8,
                            trials = 1,
                            scales = [0.01],
                            experiment_type = "bounded",
