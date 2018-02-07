@@ -24,8 +24,8 @@ tasks = [
         # ("cycles_missing", 32),
         # ("rand_varn", 32),
         # ("rand_varp", 32),
-        ("worst_vare", 32),
-        # ("rand_cv_varn", 32),
+        # ("worst_vare", 32),
+        ("rand_cv_varn", 32),
         ]
 
 last_start = 7
@@ -36,7 +36,7 @@ cut_off = cur_time + datetime.timedelta(days = 2)
 cut_off = cut_off.replace(hour = last_start, minute = last_minute, second = 0)
 # cut_off = cur_time.replace(minute = 57)
 
-start_index = 1
+start_index = 3
 task_index = 0
 task = tasks[task_index][0]
 end_index = tasks[task_index][1]
