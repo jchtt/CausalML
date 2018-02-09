@@ -1442,7 +1442,7 @@ module CausalMLTest
                            ds = [3],
                            ks = 1:5,
                            trials = 1,
-                           scales = [0.1],
+                           scales = 0.05:0.01:0.10,
                            experiment_type = "bounded",
                            force_well_conditioned = false,
                            prefix = "worst_vare",
