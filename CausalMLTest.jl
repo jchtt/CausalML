@@ -693,6 +693,9 @@ module CausalMLTest
           open("lhs-debug.bin", "w") do file
             serialize(file, lhs2)
           end
+
+          lambdas_noconstr_trials[trial] = lambda_noconstr
+          errors_noconstr_trials[trial] = err_noconstr
         else
           # Comined run with continuation
           (B1, B2, err1, err2, lambda1, lambda2, errors1, errors2, status1) = combined_oracle(pop_data, emp_data, admm_data, lh_data, lambdas)
@@ -787,7 +790,7 @@ module CausalMLTest
                                      "lambdas1_bad"=> lambdas1_bad_trials,
                                      "lambdas2_bad"=>lambdas2_bad_trials,
                                      "lambdas_noconstr_bad" => lambdas_noconstr_bad_trials,
-                                     "lambdas_noconstr"=>lambdas2_trials,
+                                     "lambdas_noconstr"=>lambdas_noconstr_trials,
                                      "lambdas_llc"=>lambdas_llc_trials,
                                      "lambdas_lh"=>lambdas_lh_trials,
                                      "lambdas_lh_bad"=>lambdas_lh_bad_trials,
