@@ -1445,10 +1445,10 @@ module CausalMLTest
                            ds = [3],
                            ks = 1:5,
                            trials = 1,
-                           scales = 0.05:0.01:0.10,
+                           scales = 0.02:0.01:0.04,
                            experiment_type = "bounded",
                            force_well_conditioned = false,
-                           prefix = "worst_vare",
+                           prefix = "worst_vare_additional",
                            lambdas = flipdim(logspace(-4, 1, 50), 1),
                            graph_type = "worst_case",
                            constant_n = true
